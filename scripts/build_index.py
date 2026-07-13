@@ -5,22 +5,24 @@ Orchestrates the complete pipeline to build the vector index from documents.
 Usage: python scripts/build_index.py
 """
 
+import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
-def main():
-    import os
-    from datetime import datetime
+def main() -> None:
+    """Build the vector index from documents in data/raw/."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root))
-    os.chdir(project_root)
 
-    from src.load_document import load_documents_from_directory
-    from src.chunker import DocumentChunker
-    from src.embedder import EmbeddingsGenerator
-    from src.vector_db import VectorStore
+    from src.config import RAW_DATA_DIR
+    from src.index_builder import IndexBuilder
 
     print("=" * 70)
     print(" " * 20 + "BUILD VECTOR INDEX")
@@ -28,64 +30,30 @@ def main():
 
     start_time = datetime.now()
 
-    # Step 1: Load documents
-    print("\n[1/4] Loading documents...")
-    raw_data_dir = project_root / "data" / "raw"
-
-    if not raw_data_dir.exists():
-        print(f"ERROR: Data directory not found: {raw_data_dir}")
+    if not RAW_DATA_DIR.exists():
+        print(f"ERROR: Data directory not found: {RAW_DATA_DIR}")
         return
 
-    documents = load_documents_from_directory(str(raw_data_dir))
-
-    if not documents:
-        print("ERROR: No documents found in data/raw/")
-        print("Please add PDF or DOCX files to data/raw/")
+    try:
+        builder = IndexBuilder()
+        stats = builder.build(rebuild=True)
+        store_stats = builder.get_stats()
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
         return
 
-    print(f"✅ Loaded {len(documents)} document(s)")
-    for doc in documents:
-        print(f"   - {doc['title']} ({len(doc['text'])} chars)")
+    elapsed = (datetime.now() - start_time).total_seconds()
 
-    # Step 2: Chunk documents
-    print("\n[2/4] Chunking documents...")
-    chunker = DocumentChunker(chunk_size=800, chunk_overlap=100)
-    chunks = chunker.chunk_documents(documents)
-
-    print(f"✅ Created {len(chunks)} chunk(s)")
-
-    # Step 3: Generate embeddings
-    print("\n[3/4] Generating embeddings...")
-    print("      (First run downloads model ~150MB)")
-
-    embedder = EmbeddingsGenerator()
-    chunks_with_embeddings = embedder.embed_chunks(chunks)
-
-    # Step 4: Build vector store
-    print("\n[4/4] Building vector store...")
-    vectorstore_path = project_root / "vectorstore"
-    vector_store = VectorStore(
-        str(vectorstore_path), collection_name="documents")
-
-    added = vector_store.add_chunks(chunks_with_embeddings)
-
-    # Final summary
     print("\n" + "=" * 70)
     print("BUILD COMPLETE!")
     print("=" * 70)
-
-    stats = vector_store.get_stats()
-    elapsed = (datetime.now() - start_time).total_seconds()
-
     print(f"\nSummary:")
-    print(f"  Documents: {len(documents)}")
-    print(f"  Chunks: {stats['total_chunks']}")
-    print(f"  Embeddings: {added}")
-    print(f"  Vector Store: {stats['vectorstore_path']}")
+    print(f"  Documents: {stats.document_count}")
+    print(f"  Chunks: {stats.chunk_count}")
+    print(f"  Vector Store: {store_stats['vectorstore_path']}")
     print(f"  Time: {elapsed:.1f} seconds")
-
-    print("\n✅ Your vector index is ready!")
-    print("   Run: streamlit run ui/app.py")
+    print("\nYour vector index is ready.")
+    print("Run: streamlit run ui/app.py")
     print("\n" + "=" * 70)
 
 

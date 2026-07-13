@@ -4,45 +4,48 @@ Gemini LLM Integration
 Handles communication with Google Gemini API for generating grounded answers.
 """
 
+import logging
 import os
 from typing import Dict, Optional
-from dotenv import load_dotenv
 
-# Load environment variables
+from dotenv import load_dotenv
+from google import genai
+
+from src.config import GEMINI_MODEL, SYSTEM_PROMPT
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiLLM:
     """Generates answers using Google Gemini API."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: str = GEMINI_MODEL) -> None:
         """
         Initialize Gemini client.
 
         Args:
             api_key: Google Gemini API key (or set GEMINI_API_KEY env var)
+            model: Gemini model identifier
         """
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.model = model
 
         if not self.api_key:
             raise ValueError(
                 "GEMINI_API_KEY not found. "
-                "Set it in .env file or pass api_key parameter"
+                "Set it in .env file or pass api_key parameter."
             )
 
-        # Import here to avoid dependency if not using Gemini
-        import google.generativeai as genai
-
-        genai.configure(api_key=self.api_key)
-        self.client = genai.GenerativeModel("gemini-pro")
-
-        print("✅ Gemini LLM initialized")
+        self.client = genai.Client(api_key=self.api_key)
+        logger.info("Gemini LLM initialized (model: %s)", self.model)
 
     def generate_answer(
         self,
         query: str,
         context: str,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate an answer based on query and context.
@@ -55,28 +58,18 @@ class GeminiLLM:
         Returns:
             Generated answer
         """
-        if system_prompt is None:
-            system_prompt = """You are a helpful documentation assistant.
-            
-Use ONLY the provided context to answer the question.
+        prompt = system_prompt or SYSTEM_PROMPT
+        full_prompt = (
+            f"{prompt}\n\n"
+            f"Context:\n{context}\n\n"
+            f"Question: {query}\n\n"
+            f"Answer:"
+        )
 
-If the answer is not in the context, say:
-"I don't have information about this in the available documents."
-
-Always be accurate and cite relevant sections when possible."""
-
-        # Build full prompt
-        prompt = f"""{system_prompt}
-
-Context:
-{context}
-
-Question: {query}
-
-Answer:"""
-
-        # Call Gemini
-        response = self.client.generate_content(prompt)
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=full_prompt,
+        )
 
         return response.text
 
@@ -84,7 +77,8 @@ Answer:"""
         self,
         query: str,
         context: str,
-        sources: list
+        sources: list,
+        system_prompt: Optional[str] = None,
     ) -> Dict:
         """
         Generate answer and include source information.
@@ -93,14 +87,16 @@ Answer:"""
             query: User's question
             context: Retrieved document context
             sources: List of source file names
+            system_prompt: Optional custom system prompt
 
         Returns:
             Dictionary with answer and sources
         """
-        answer = self.generate_answer(query, context)
+        answer = self.generate_answer(
+            query, context, system_prompt=system_prompt)
 
         return {
             "answer": answer,
             "sources": sources,
-            "query": query
+            "query": query,
         }

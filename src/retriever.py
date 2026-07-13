@@ -4,8 +4,9 @@ Retriever Module
 Retrieves relevant document chunks for a given query using semantic search.
 """
 
-from typing import List, Dict
-import numpy as np
+from typing import Dict, List
+
+from src.config import TOP_K
 
 
 class Retriever:
@@ -22,7 +23,7 @@ class Retriever:
         self.embedder = embedder
         self.vector_store = vector_store
 
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
+    def retrieve(self, query: str, top_k: int = TOP_K) -> List[Dict]:
         """
         Retrieve relevant chunks for a query.
 
@@ -42,7 +43,7 @@ class Retriever:
 
         return results
 
-    def retrieve_with_context(self, query: str, top_k: int = 5) -> Dict:
+    def retrieve_with_context(self, query: str, top_k: int = TOP_K) -> Dict:
         """
         Retrieve chunks and prepare context for LLM.
 

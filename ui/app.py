@@ -1,147 +1,252 @@
-# -*-coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Streamlit Web App - AI Documentation Copilot
 """
 
-import streamlit as st
-import sys
+import logging
 import os
+import sys
 from pathlib import Path
 
-# Setup paths FIRST before any src imports
+import streamlit as st
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
-# NOW import src modules after path setup
-from src.rag import RAGPipeline
-from src.gemini import GeminiLLM
-from src.retriever import Retriever
-from src.vector_db import VectorStore
-from src.embedder import EmbeddingsGenerator
-from src.chunker import DocumentChunker
-from src.load_document import load_documents_from_directory
+from src.config import RAW_DATA_DIR, SUPPORTED_EXTENSIONS, TOP_K
+from src.index_builder import IndexBuilder
 
-# Page config
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 st.set_page_config(
     page_title="AI Docs Copilot",
-    page_icon="book",
-    layout="wide"
+    page_icon="📚",
+    layout="wide",
 )
 
-st.title("AI Documentation Copilot")
-st.markdown("Ask questions about your documents with AI assistance.")
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# Initialize session state
+
+@st.cache_resource
+def get_index_builder() -> IndexBuilder:
+    """Return a cached IndexBuilder instance."""
+    return IndexBuilder()
+
+
+def save_uploaded_files(uploaded_files) -> list[str]:
+    """
+    Save uploaded files to data/raw/.
+
+    Args:
+        uploaded_files: Streamlit UploadedFile objects
+
+    Returns:
+        List of saved filenames
+    """
+    saved: list[str] = []
+    for uploaded_file in uploaded_files:
+        suffix = Path(uploaded_file.name).suffix.lower()
+        if suffix not in SUPPORTED_EXTENSIONS:
+            continue
+
+        destination = RAW_DATA_DIR / uploaded_file.name
+        destination.write_bytes(uploaded_file.getbuffer())
+        saved.append(uploaded_file.name)
+        logger.info("Saved uploaded file: %s", uploaded_file.name)
+
+    return saved
+
+
+def rebuild_index(builder: IndexBuilder) -> bool:
+    """
+    Rebuild the vector index and refresh the RAG pipeline.
+
+    Args:
+        builder: IndexBuilder instance
+
+    Returns:
+        True if rebuild succeeded
+    """
+    try:
+        with st.spinner("Rebuilding index..."):
+            builder.build(rebuild=True)
+            st.session_state.rag_pipeline = builder.create_rag_pipeline()
+            st.session_state.index_stats = builder.get_stats()
+            st.session_state.index_ready = True
+        return True
+    except ValueError as exc:
+        st.error(str(exc))
+        st.session_state.rag_pipeline = None
+        st.session_state.index_ready = False
+        st.session_state.index_stats = builder.get_stats()
+        return False
+    except Exception as exc:
+        logger.exception("Index rebuild failed")
+        st.error(f"Failed to rebuild index: {exc}")
+        return False
+
+
+def load_existing_pipeline(builder: IndexBuilder) -> None:
+    """Load an existing index into the RAG pipeline if available."""
+    stats = builder.get_stats()
+    st.session_state.index_stats = stats
+
+    if stats["total_chunks"] == 0:
+        st.session_state.rag_pipeline = None
+        st.session_state.index_ready = False
+        return
+
+    try:
+        st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        st.session_state.index_ready = True
+    except ValueError as exc:
+        st.session_state.rag_pipeline = None
+        st.session_state.index_ready = False
+        logger.warning("Could not load pipeline: %s", exc)
+
+
+def render_retrieved_chunks(chunks: list[dict]) -> None:
+    """Render expandable retrieved chunk details."""
+    with st.expander("Retrieved Chunks", expanded=False):
+        if not chunks:
+            st.write("No chunks retrieved.")
+            return
+
+        for idx, chunk in enumerate(chunks, 1):
+            metadata = chunk.get("metadata", {})
+            filename = metadata.get("filename", "unknown")
+            chunk_id = metadata.get("chunk_id", chunk.get("id", f"chunk_{idx}"))
+            similarity = chunk.get("similarity", 0.0)
+
+            st.markdown(f"**Chunk {idx}** — `{filename}` (`{chunk_id}`)")
+            st.caption(f"Similarity: {similarity:.3f}")
+            st.text(chunk.get("text", ""))
+            if idx < len(chunks):
+                st.divider()
+
+
+# Session state initialization
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 if "rag_pipeline" not in st.session_state:
     st.session_state.rag_pipeline = None
-    st.session_state.initialized = False
-    st.session_state.messages = []
+if "index_ready" not in st.session_state:
+    st.session_state.index_ready = False
+if "index_stats" not in st.session_state:
+    st.session_state.index_stats = {
+        "document_count": 0,
+        "total_chunks": 0,
+    }
+if "pipeline_loaded" not in st.session_state:
+    builder = get_index_builder()
+    load_existing_pipeline(builder)
+    st.session_state.pipeline_loaded = True
 
 
-def initialize_pipeline():
-    """Initialize the RAG pipeline."""
-    with st.spinner("Loading pipeline..."):
-        try:
-            raw_data_dir = PROJECT_ROOT / "data" / "raw"
-            documents = load_documents_from_directory(str(raw_data_dir))
-            
-            if not documents:
-                st.error("No documents in data/raw/")
-                return False
-            
-            chunker = DocumentChunker(chunk_size=800, chunk_overlap=100)
-            chunks = chunker.chunk_documents(documents)
-            
-            embedder = EmbeddingsGenerator()
-            chunks_with_embeddings = embedder.embed_chunks(chunks)
-            
-            vectorstore_path = PROJECT_ROOT / "vectorstore"
-            vector_store = VectorStore(str(vectorstore_path), collection_name="documents")
-            vector_store.add_chunks(chunks_with_embeddings)
-            
-            retriever = Retriever(embedder, vector_store)
-            llm = GeminiLLM()
-            
-            st.session_state.rag_pipeline = RAGPipeline(embedder, retriever, llm)
-            st.session_state.initialized = True
-            
-            return True
-            
-        except ValueError as e:
-            st.error(str(e))
-            return False
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-            return False
-
+builder = get_index_builder()
+stats = st.session_state.index_stats
 
 # Sidebar
 with st.sidebar:
-    st.header("Settings")
-    
-    if st.button("Initialize Pipeline", use_container_width=True):
-        if initialize_pipeline():
-            st.success("Ready!")
-    
-    if st.session_state.initialized:
-        st.info("System initialized")
-    else:
-        st.warning("Click Initialize Pipeline")
-    
+    st.header("Index")
+
+    st.metric("Indexed Documents", stats.get("document_count", 0))
+    st.metric("Indexed Chunks", stats.get("total_chunks", 0))
+
+    if st.button("Rebuild Index", use_container_width=True):
+        if rebuild_index(builder):
+            st.success("Index rebuilt successfully.")
+            st.rerun()
+
     st.divider()
-    
-    top_k = st.slider("Retrieved chunks", 1, 10, 5)
-    
+
+    top_k = st.slider("Retrieved Chunks (Top K)", 1, 10, TOP_K)
+
     if st.button("Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
+# Main page
+st.title("AI Documentation Copilot")
+st.markdown(
+    "Upload PDF or DOCX documents, then ask questions grounded in your documentation."
+)
 
-# Main content
-if not st.session_state.initialized:
-    st.info("1. Click Initialize Pipeline\n2. Ask a question")
+st.subheader("Upload Documents")
+uploaded_files = st.file_uploader(
+    "Upload PDF or DOCX files",
+    type=["pdf", "docx"],
+    accept_multiple_files=True,
+)
+
+if uploaded_files and st.button("Save and Index Documents", use_container_width=True):
+    saved = save_uploaded_files(uploaded_files)
+    if saved:
+        if rebuild_index(builder):
+            st.success(
+                f"Successfully indexed {len(saved)} file(s): "
+                f"{', '.join(saved)}"
+            )
+            st.rerun()
+    else:
+        st.warning("No supported files were uploaded. Only PDF and DOCX are accepted.")
+
+st.divider()
+
+if not st.session_state.index_ready:
+    st.info(
+        "Upload PDF or DOCX files above to build the index, "
+        "or click **Rebuild Index** in the sidebar if documents already exist in `data/raw/`."
+    )
 else:
     st.subheader("Ask a Question")
-    
-    # Chat history
+
     for message in st.session_state.messages:
-        if message["role"] == "user":
-            with st.chat_message("user"):
-                st.write(message["content"])
-        else:
-            with st.chat_message("assistant"):
-                st.write(message["content"])
-                if "sources" in message:
-                    with st.expander("Sources"):
-                        for s in message["sources"]:
-                            st.write(f"- {s}")
-    
-    # Input
-    query = st.chat_input("Ask about documents...")
-    
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+            if message["role"] == "assistant":
+                if message.get("sources"):
+                    st.markdown("**Sources:** " + ", ".join(message["sources"]))
+                if message.get("retrieved_chunks"):
+                    render_retrieved_chunks(message["retrieved_chunks"])
+
+    query = st.chat_input("Ask about your documents...")
+
     if query:
         st.session_state.messages.append({"role": "user", "content": query})
+
         with st.chat_message("user"):
             st.write(query)
-        
+
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.spinner("Searching documents and generating answer..."):
                 try:
                     result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
                     answer = result["answer"]
+                    sources = result["sources"]
+                    retrieved_chunks = result["retrieved_chunks"]
+
                     st.write(answer)
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": answer,
-                        "sources": result["sources"]
-                    })
-                    
-                    with st.expander("Sources"):
-                        for s in result["sources"]:
-                            st.write(f"- {s}")
-                    
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+
+                    if sources:
+                        st.markdown("**Sources:** " + ", ".join(sources))
+
+                    render_retrieved_chunks(retrieved_chunks)
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": answer,
+                            "sources": sources,
+                            "retrieved_chunks": retrieved_chunks,
+                        }
+                    )
+                except Exception as exc:
+                    logger.exception("Question answering failed")
+                    st.error(f"Error: {exc}")
                     st.session_state.messages.pop()

@@ -1,83 +1,61 @@
-"""
-Test Document Loaders
+"""Test document loaders for PDF and DOCX files."""
 
-Tests the document loading functionality for PDF and DOCX files.
-"""
-
-from src.load_document import load_documents_from_directory
-import sys
-import os
-from pathlib import Path
-
-# Add parent directory to path so we can import src
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-os.chdir(project_root)
+from test_utils import setup_project
 
 
-def test_loaders():
-    """Test loading all documents from data/raw directory."""
+def main() -> None:
+    setup_project()
 
-    raw_data_dir = Path(__file__).parent.parent / "data" / "raw"
+    from src.config import RAW_DATA_DIR, SUPPORTED_EXTENSIONS
+    from src.load_document import load_documents_from_directory
 
     print("=" * 60)
-    print("📄 Document Loader Test")
+    print("Document Loader Test")
     print("=" * 60)
-    print(f"\nScanning: {raw_data_dir}\n")
+    print(f"\nScanning: {RAW_DATA_DIR}\n")
 
-    if not raw_data_dir.exists():
-        print(f"❌ Directory not found: {raw_data_dir}")
+    if not RAW_DATA_DIR.exists():
+        print(f"Directory not found: {RAW_DATA_DIR}")
         return
 
-    # Check for any files
-    all_files = list(raw_data_dir.iterdir())
+    all_files = list(RAW_DATA_DIR.iterdir())
     if not all_files:
-        print("⚠️  No files found in data/raw/")
-        print("\n💡 Tip: Add PDF and DOCX files to data/raw/ to test the loaders")
+        print("No files found in data/raw/")
+        print("Run: python scripts/create_samples.py")
         return
 
-    # Load documents
-    try:
-        documents = load_documents_from_directory(str(raw_data_dir))
+    documents = load_documents_from_directory(str(RAW_DATA_DIR))
+    if not documents:
+        print("No supported documents found (.pdf or .docx)")
+        print(f"Found files: {[path.name for path in all_files]}")
+        return
 
-        if not documents:
-            print("❌ No supported documents found (.pdf or .docx)")
-            print(f"Found files: {[f.name for f in all_files]}")
-            return
+    print(f"Successfully loaded {len(documents)} document(s)\n")
 
-        print(f"✅ Successfully loaded {len(documents)} document(s)\n")
+    total_chars = 0
+    for idx, doc in enumerate(documents, 1):
+        title = doc["title"]
+        doc_type = doc["metadata"].get("type", "unknown")
+        char_count = len(doc["text"])
+        total_chars += char_count
 
-        # Display info for each document
-        total_chars = 0
-        for idx, doc in enumerate(documents, 1):
-            title = doc["title"]
-            text = doc["text"]
-            char_count = len(text)
-            doc_type = doc["metadata"]["type"]
+        print(f"{idx}. {title} ({doc_type.upper()})")
+        print(f"   Characters: {char_count:,}")
+        print(f"   Source: {doc['metadata']['source']}")
+        if doc_type == "pdf":
+            print(f"   Pages: {doc['metadata'].get('pages', 'n/a')}")
+        if doc_type == "docx":
+            print(f"   Paragraphs: {doc['metadata'].get('paragraphs', 'n/a')}")
+        print()
 
-            total_chars += char_count
-
-            print(f"{idx}. {title} ({doc_type.upper()})")
-            print(f"   Characters: {char_count:,}")
-            print(f"   Source: {doc['metadata']['source']}")
-            if 'pages' in doc['metadata']:
-                print(f"   Pages: {doc['metadata']['pages']}")
-            if 'paragraphs' in doc['metadata']:
-                print(f"   Paragraphs: {doc['metadata']['paragraphs']}")
-            print()
-
-        print("-" * 60)
-        print(f"Total documents: {len(documents)}")
-        print(f"Total characters: {total_chars:,}")
-        print("=" * 60)
-        print("✅ Phase 1 Test: PASSED")
-        print("=" * 60)
-
-    except Exception as e:
-        print(f"❌ Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+    print("-" * 60)
+    print(f"Total documents: {len(documents)}")
+    print(f"Total characters: {total_chars:,}")
+    print(f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+    print("=" * 60)
+    print("Document Loader Test: PASSED")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
-    test_loaders()
+    main()

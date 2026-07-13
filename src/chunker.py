@@ -5,14 +5,21 @@ Breaks large documents into semantic chunks suitable for embeddings.
 Uses LangChain's RecursiveCharacterTextSplitter.
 """
 
+from typing import Dict, List
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from typing import List, Dict
+
+from src.config import CHUNK_OVERLAP, CHUNK_SIZE
 
 
 class DocumentChunker:
     """Chunks documents into overlapping passages."""
 
-    def __init__(self, chunk_size: int = 800, chunk_overlap: int = 100):
+    def __init__(
+        self,
+        chunk_size: int = CHUNK_SIZE,
+        chunk_overlap: int = CHUNK_OVERLAP,
+    ) -> None:
         """
         Initialize the chunker.
 
@@ -27,7 +34,7 @@ class DocumentChunker:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
+            separators=["\n\n", "\n", ". ", " ", ""],
         )
 
     def chunk_document(self, document: Dict) -> List[Dict]:
@@ -38,25 +45,30 @@ class DocumentChunker:
             document: Document dict from load_document with 'text' and 'metadata'
 
         Returns:
-            List of chunk dicts with chunk text, metadata, and chunk index
+            List of chunk dicts with chunk text and metadata
         """
         text = document["text"]
         metadata = document["metadata"]
+        filename = metadata["filename"]
+        document_type = metadata.get("type", "unknown")
 
-        # Split the text
         chunk_texts = self.splitter.split_text(text)
+        total_chunks = len(chunk_texts)
 
-        # Create chunk objects
-        chunks = []
+        chunks: List[Dict] = []
         for chunk_idx, chunk_text in enumerate(chunk_texts, 1):
+            chunk_id = f"{filename}_{chunk_idx}"
             chunk = {
                 "text": chunk_text,
                 "metadata": {
-                    **metadata,  # Include original metadata
+                    **metadata,
+                    "filename": filename,
+                    "chunk_id": chunk_id,
+                    "document_type": document_type,
                     "chunk_index": chunk_idx,
                     "chunk_size": len(chunk_text),
-                    "total_chunks": len(chunk_texts)
-                }
+                    "total_chunks": total_chunks,
+                },
             }
             chunks.append(chunk)
 
@@ -72,7 +84,7 @@ class DocumentChunker:
         Returns:
             List of chunk dicts from all documents
         """
-        all_chunks = []
+        all_chunks: List[Dict] = []
         for doc in documents:
             chunks = self.chunk_document(doc)
             all_chunks.extend(chunks)

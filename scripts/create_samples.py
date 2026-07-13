@@ -1,20 +1,24 @@
 """
-Create sample test documents for development
+Create sample test documents for development.
 """
 
-from docx.shared import Pt, RGBColor
-from docx import Document
-import fitz  # PyMuPDF
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from docx import Document
+from docx.shared import Pt, RGBColor
+import fitz  # PyMuPDF
+
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.config import RAW_DATA_DIR
 
 
-def create_sample_pdf():
+def create_sample_pdf() -> None:
     """Create a sample PDF for testing."""
-    pdf_path = Path(__file__).parent.parent / \
-        "data" / "raw" / "Sample_Guide.pdf"
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    pdf_path = RAW_DATA_DIR / "Sample_Guide.pdf"
 
     doc = fitz.open()
     page = doc.new_page()
@@ -70,10 +74,10 @@ For support, contact: support@example.com"""
     print(f"✅ Created: {pdf_path}")
 
 
-def create_sample_docx():
+def create_sample_docx() -> None:
     """Create a sample DOCX file for testing."""
-    docx_path = Path(__file__).parent.parent / "data" / \
-        "raw" / "Sample_Vendor_Onboarding.docx"
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    docx_path = RAW_DATA_DIR / "Sample_Vendor_Onboarding.docx"
 
     doc = Document()
 
