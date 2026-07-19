@@ -39,7 +39,12 @@ def main() -> None:
         result = rag.answer(query, top_k=3)
 
         print(f"\nAnswer:\n{result['answer']}")
+        print(f"Confidence: {result.get('confidence', 0)}%")
         print(f"\nSources: {', '.join(result['sources'])}")
+        if result.get("related_articles"):
+            print(f"Related: {', '.join(result['related_articles'])}")
+        if result.get("suggested_next_steps"):
+            print(f"Next steps: {', '.join(result['suggested_next_steps'])}")
         print(f"Retrieved chunks: {result['num_chunks']}\n")
 
     print("=" * 60)

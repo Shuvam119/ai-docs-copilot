@@ -6,7 +6,7 @@ Orchestrates the complete Retrieval-Augmented Generation pipeline.
 
 from typing import Dict, Optional
 
-from src.config import SYSTEM_PROMPT, TOP_K
+from src.config import NAVIGATOR_PROMPT, TOP_K
 
 
 class RAGPipeline:
@@ -44,17 +44,20 @@ class RAGPipeline:
         """
         retrieval = self.retriever.retrieve_with_context(query, top_k=top_k)
 
-        llm_result = self.llm.generate_answer_with_sources(
+        llm_result = self.llm.generate_navigation_response(
             query,
             retrieval["context"],
             retrieval["sources"],
-            system_prompt=system_prompt or SYSTEM_PROMPT,
+            system_prompt=system_prompt or NAVIGATOR_PROMPT,
         )
 
         return {
             "query": query,
             "answer": llm_result["answer"],
             "sources": llm_result["sources"],
+            "related_articles": llm_result["related_articles"],
+            "suggested_next_steps": llm_result["suggested_next_steps"],
+            "confidence": round(retrieval["best_similarity"] * 100),
             "retrieved_chunks": retrieval["retrieved_chunks"],
             "num_chunks": retrieval["num_chunks"],
             "low_confidence": retrieval["low_confidence"],

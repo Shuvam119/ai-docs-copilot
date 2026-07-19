@@ -22,8 +22,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="Knowledge Copilot",
-    page_icon="📚",
+    page_title="AI Knowledge Navigator",
+    page_icon="🧭",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -61,6 +61,36 @@ st.markdown(
         .source-name { color: #253b82; font-size: .82rem; font-weight: 700; }
         .source-text { color: #475467; font-size: .9rem; margin-top: .25rem; }
         .welcome-card { background: white; border: 1px dashed #c7d2fe; border-radius: 16px; padding: 2rem; text-align: center; }
+        .navigator-card {
+            background: white; border: 1px solid #e5e9f2; border-radius: 18px;
+            padding: 1.35rem 1.5rem; margin: .35rem 0 1rem;
+            box-shadow: 0 8px 24px rgba(26, 47, 107, 0.06);
+        }
+        .navigator-label {
+            color: #667085; font-size: .72rem; font-weight: 700;
+            letter-spacing: .12em; text-transform: uppercase; margin-bottom: .55rem;
+        }
+        .navigator-answer { color: #101828; font-size: 1rem; line-height: 1.65; margin: 0; }
+        .navigator-divider { border: 0; border-top: 1px solid #eaecf0; margin: 1.1rem 0; }
+        .confidence-pill {
+            display: inline-block; border-radius: 999px; padding: .28rem .75rem;
+            font-size: .78rem; font-weight: 700; margin-bottom: .85rem;
+        }
+        .confidence-high { background: #ecfdf3; color: #027a48; }
+        .confidence-medium { background: #fffaeb; color: #b54708; }
+        .confidence-low { background: #fef3f2; color: #b42318; }
+        .navigator-list { margin: .35rem 0 0; padding-left: 0; list-style: none; }
+        .navigator-list li {
+            color: #344054; font-size: .92rem; line-height: 1.55;
+            padding: .28rem 0 .28rem 1.35rem; position: relative;
+        }
+        .navigator-list li::before {
+            content: "•"; color: #6079ee; font-weight: 700;
+            position: absolute; left: 0;
+        }
+        .navigator-sources li::before { content: "✓"; color: #12b76a; }
+        .navigator-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        @media (max-width: 768px) { .navigator-grid { grid-template-columns: 1fr; } }
     </style>
     """,
     unsafe_allow_html=True,
@@ -171,6 +201,112 @@ def snippet(text: str, limit: int = 320) -> str:
     return compact if len(compact) <= limit else f"{compact[:limit].rstrip()}…"
 
 
+def format_doc_title(filename: str) -> str:
+    """Turn a filename into a readable document title."""
+    return Path(filename).stem.replace("_", " ")
+
+
+def confidence_class(confidence: int) -> str:
+    """Return a CSS class for the confidence pill."""
+    if confidence >= 75:
+        return "confidence-high"
+    if confidence >= 50:
+        return "confidence-medium"
+    return "confidence-low"
+
+
+def build_assistant_message(result: dict) -> dict:
+    """Normalize a RAG result into a persisted assistant message."""
+    return {
+        "role": "assistant",
+        "content": result["answer"],
+        "answer": result["answer"],
+        "confidence": result.get("confidence", 0),
+        "sources": result.get("sources", []),
+        "related_articles": result.get("related_articles", []),
+        "suggested_next_steps": result.get("suggested_next_steps", []),
+        "retrieved_chunks": result.get("retrieved_chunks", []),
+        "low_confidence": result.get("low_confidence", False),
+    }
+
+
+def render_knowledge_navigator(message: dict, message_index: int) -> None:
+    """Render the structured AI Knowledge Navigator response."""
+    answer = message.get("answer") or message.get("content", "")
+    confidence = int(message.get("confidence", 0))
+    sources = message.get("sources", [])
+    related_articles = message.get("related_articles", [])
+    next_steps = message.get("suggested_next_steps", [])
+
+    confidence_label = confidence_class(confidence)
+    if message.get("low_confidence"):
+        confidence_label = "confidence-low"
+
+    st.markdown(
+        f"""
+        <div class="navigator-card">
+            <div class="navigator-label">Answer</div>
+            <div class="confidence-pill {confidence_label}">Confidence: {confidence}%</div>
+            <p class="navigator-answer">{html.escape(answer)}</p>
+            <hr class="navigator-divider" />
+            <div class="navigator-label">Sources</div>
+            <ul class="navigator-list navigator-sources">
+                {''.join(f'<li>{html.escape(format_doc_title(source))}</li>' for source in sources) or '<li>No sources found</li>'}
+            </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if related_articles or next_steps:
+        left, right = st.columns(2)
+        with left:
+            if related_articles:
+                st.markdown("**Related Articles**")
+                for idx, topic in enumerate(related_articles):
+                    if st.button(
+                        topic,
+                        key=f"related_{message_index}_{idx}_{topic}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.pending_follow_up = topic
+                        st.rerun()
+        with right:
+            if next_steps:
+                st.markdown("**Suggested Next Steps**")
+                for step in next_steps:
+                    st.markdown(f"- {step}")
+
+    render_source_snippets(message.get("retrieved_chunks", []))
+
+
+def answer_question(query: str, top_k: int) -> None:
+    """Run a query through the RAG pipeline and append the assistant response."""
+    st.session_state.messages.append({"role": "user", "content": query})
+    with st.chat_message("user", avatar="👤"):
+        st.write(query)
+
+    with st.chat_message("assistant", avatar="🤖"):
+        with st.spinner("Navigating your knowledge base…"):
+            try:
+                result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
+                if result.get("low_confidence"):
+                    st.warning(
+                        "No strong match was found in your documents. "
+                        "Review the sources carefully before acting on this answer."
+                    )
+                assistant_message = build_assistant_message(result)
+                render_knowledge_navigator(
+                    assistant_message,
+                    message_index=len(st.session_state.messages),
+                )
+                st.session_state.messages.append(assistant_message)
+            except Exception as exc:
+                logger.exception("Question answering failed")
+                st.error(f"Unable to answer this question: {exc}")
+                st.session_state.messages.pop()
+
+
 def render_source_snippets(chunks: list[dict]) -> None:
     """Display the retrieved evidence directly beneath an answer."""
     if not chunks:
@@ -243,9 +379,9 @@ with st.sidebar:
 st.markdown(
     """
     <section class="hero">
-      <div class="eyebrow">KNOWLEDGE, MADE CONVERSATIONAL</div>
-      <h1>Your documentation, ready to answer.</h1>
-      <p>Ask precise questions across your trusted internal documents. Every response is grounded in retrieved source material.</p>
+      <div class="eyebrow">AI KNOWLEDGE NAVIGATOR</div>
+      <h1>Your documentation, intelligently guided.</h1>
+      <p>Ask a question and get a grounded answer with sources, related articles, and suggested next steps — not just a chat reply.</p>
     </section>
     """,
     unsafe_allow_html=True,
@@ -284,19 +420,27 @@ if not st.session_state.index_ready:
         unsafe_allow_html=True,
     )
 else:
-    st.markdown("### Ask your knowledge base")
-    st.caption("Answers cite the passages used to generate them.")
-    for message in st.session_state.messages:
+    st.markdown("### AI Knowledge Navigator")
+    st.caption("Structured answers with sources, related articles, and suggested next steps.")
+    for message_index, message in enumerate(st.session_state.messages):
         avatar = "🤖" if message["role"] == "assistant" else "👤"
         with st.chat_message(message["role"], avatar=avatar):
-            st.write(message["content"])
             if message["role"] == "assistant":
                 if message.get("low_confidence"):
                     st.warning(
                         "No strong match was found in your documents. "
-                        "The answer may be unreliable."
+                        "Review the sources carefully before acting on this answer."
                     )
-                render_source_snippets(message.get("retrieved_chunks", []))
+                render_knowledge_navigator(message, message_index=message_index)
+            else:
+                st.write(message["content"])
+
+    pending_follow_up = st.session_state.pop("pending_follow_up", None)
+    if pending_follow_up and has_api_key():
+        if st.session_state.rag_pipeline is None:
+            st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        if st.session_state.rag_pipeline:
+            answer_question(pending_follow_up, top_k=top_k)
 
     query = st.chat_input("Ask a question about your documentation")
     if query:
@@ -306,29 +450,4 @@ else:
             st.session_state.rag_pipeline = builder.create_rag_pipeline()
 
         if has_api_key() and st.session_state.rag_pipeline:
-            st.session_state.messages.append({"role": "user", "content": query})
-            with st.chat_message("user", avatar="👤"):
-                st.write(query)
-            with st.chat_message("assistant", avatar="🤖"):
-                with st.spinner("Finding trusted evidence and drafting an answer…"):
-                    try:
-                        result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
-                        if result.get("low_confidence"):
-                            st.warning(
-                                "No strong match was found in your documents. "
-                                "The answer may be unreliable."
-                            )
-                        st.write(result["answer"])
-                        render_source_snippets(result["retrieved_chunks"])
-                        st.session_state.messages.append(
-                            {
-                                "role": "assistant",
-                                "content": result["answer"],
-                                "retrieved_chunks": result["retrieved_chunks"],
-                                "low_confidence": result.get("low_confidence", False),
-                            }
-                        )
-                    except Exception as exc:
-                        logger.exception("Question answering failed")
-                        st.error(f"Unable to answer this question: {exc}")
-                        st.session_state.messages.pop()
+            answer_question(query, top_k=top_k)

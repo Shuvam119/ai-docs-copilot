@@ -4,14 +4,15 @@ Groq LLM Integration
 Provides a provider-neutral interface backed by the Groq API.
 """
 
+import json
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.config import LLM_MODEL, SYSTEM_PROMPT
+from src.config import LLM_MODEL, NAVIGATOR_PROMPT, SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -143,3 +144,72 @@ Question:
             "sources": sources,
             "query": query,
         }
+
+    def generate_navigation_response(
+        self,
+        query: str,
+        context: str,
+        sources: List[str],
+        system_prompt: Optional[str] = None,
+    ) -> Dict:
+        """
+        Generate a structured knowledge navigation response.
+
+        Returns answer text plus related articles and suggested next steps.
+        """
+        prompt = system_prompt or NAVIGATOR_PROMPT
+        source_list = ", ".join(sources) if sources else "none"
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Context:\n{context}\n\n"
+                        f"Question:\n{query}\n\n"
+                        f"Available source documents: {source_list}"
+                    ),
+                },
+            ],
+        )
+
+        raw = response.choices[0].message.content.strip()
+        answer = raw
+        related_articles: List[str] = []
+        suggested_next_steps: List[str] = []
+
+        try:
+            parsed = json.loads(raw)
+            answer = str(parsed.get("answer", "")).strip() or answer
+            related_articles = self._normalize_string_list(
+                parsed.get("related_articles", [])
+            )
+            suggested_next_steps = self._normalize_string_list(
+                parsed.get("suggested_next_steps", [])
+            )
+        except json.JSONDecodeError:
+            logger.warning("Navigation response was not valid JSON; using raw text")
+
+        if not answer:
+            answer = "The information could not be found."
+
+        return {
+            "answer": answer,
+            "related_articles": related_articles,
+            "suggested_next_steps": suggested_next_steps,
+            "sources": sources,
+            "query": query,
+        }
+
+    @staticmethod
+    def _normalize_string_list(values: object, limit: int = 4) -> List[str]:
+        """Return a cleaned list of non-empty strings."""
+        if not isinstance(values, list):
+            return []
+
+        cleaned = [str(value).strip() for value in values if str(value).strip()]
+        return cleaned[:limit]
