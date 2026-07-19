@@ -23,7 +23,7 @@ def main() -> None:
         rag = builder.create_rag_pipeline()
     except ValueError as exc:
         print(f"LLM not available: {exc}")
-        print("Add GEMINI_API_KEY to .env to run this test.")
+        print("Add GROQ_API_KEY to .env to run this test.")
         return
 
     test_queries = [

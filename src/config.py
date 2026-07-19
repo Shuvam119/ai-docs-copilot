@@ -13,7 +13,7 @@ CHUNK_OVERLAP = 100
 TOP_K = 5
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 COLLECTION_NAME = "documents"
-GEMINI_MODEL = "gemini-2.0-flash"
+LLM_MODEL = "llama-3.3-70b-versatile"
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 

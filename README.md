@@ -7,7 +7,7 @@ A production-quality RAG (Retrieval-Augmented Generation) proof of concept for t
 - PDF and DOCX document ingestion
 - Local embeddings with `BAAI/bge-small-en-v1.5`
 - Persistent vector search with ChromaDB
-- Grounded answers via Google Gemini
+- Grounded answers via an LLM provider (Groq by default)
 - Streamlit UI with upload, index rebuild, and retrieved chunk inspection
 
 ## Tech Stack
@@ -19,7 +19,7 @@ A production-quality RAG (Retrieval-Augmented Generation) proof of concept for t
 - LangChain Text Splitters
 - PyMuPDF
 - python-docx
-- Google Gemini API (`google-genai`)
+- Groq API via the OpenAI-compatible client (`openai`)
 
 ## Setup
 
@@ -37,7 +37,7 @@ pip install -r requirements.txt
 
 ### 3. Configure API key
 
-Copy the example env file and add your Gemini API key:
+Copy the example env file and add your Groq API key:
 
 ```powershell
 copy .env.example .env
@@ -46,10 +46,11 @@ copy .env.example .env
 Edit `.env`:
 
 ```
-GEMINI_API_KEY=your_key_here
+# Create this key in the Groq console.
+GROQ_API_KEY=gsk_...
 ```
 
-Get a key at: https://ai.google.dev
+Get a key at: https://console.groq.com/keys
 
 ### 4. (Optional) Create sample documents
 
@@ -98,7 +99,7 @@ ai-docs-copilot/
 │   ├── embedder.py       # Sentence-transformers embeddings
 │   ├── vector_db.py      # ChromaDB storage and search
 │   ├── retriever.py      # Semantic retrieval
-│   ├── gemini.py         # Gemini LLM integration
+│   ├── llm.py            # Provider-neutral LLM client
 │   ├── index_builder.py  # Index build orchestration
 │   └── rag.py            # RAG pipeline
 ├── ui/
@@ -121,13 +122,13 @@ Run these from the project root after adding documents to `data/raw/`:
 | `python scripts/embedder_test.py` | Embedding generation |
 | `python scripts/vector_db_test.py` | ChromaDB storage and search |
 | `python scripts/retriever_test.py` | Semantic retrieval |
-| `python scripts/gemini_test.py` | Gemini answers (requires API key) |
+| `python scripts/llm_test.py` | LLM answers (requires API key) |
 | `python scripts/rag_test.py` | Full RAG pipeline (requires API key) |
 
 ## RAG pipeline
 
 ```
-Question → Embedding → Chroma Search → Prompt → Gemini → Answer
+Question → Embedding → Chroma Search → Prompt → LLM → Answer
 ```
 
 - Chunk size: 800 characters, overlap: 100

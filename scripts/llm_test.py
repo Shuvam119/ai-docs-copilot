@@ -1,4 +1,4 @@
-"""Test Gemini integration with retrieved context."""
+"""Test LLM integration with retrieved context."""
 
 from test_utils import build_test_index, setup_project
 
@@ -6,10 +6,10 @@ from test_utils import build_test_index, setup_project
 def main() -> None:
     setup_project()
 
-    from src.gemini import GeminiLLM
+    from src.llm import LLMClient
 
     print("=" * 60)
-    print("Gemini Integration Test")
+    print("LLM Integration Test")
     print("=" * 60)
 
     try:
@@ -22,10 +22,10 @@ def main() -> None:
     print(f"Indexed {stats.document_count} document(s), {stats.chunk_count} chunk(s)")
 
     try:
-        llm = GeminiLLM()
+        llm = LLMClient()
     except ValueError as exc:
         print(f"Error: {exc}")
-        print("Add GEMINI_API_KEY to .env to run this test.")
+        print("Add GROQ_API_KEY to .env to run this test.")
         return
 
     from src.retriever import Retriever
@@ -37,7 +37,7 @@ def main() -> None:
         "What does the API guide cover?",
     ]
 
-    print("\nTesting Gemini with retrieved context:\n")
+    print("\nTesting LLM with retrieved context:\n")
     for query in test_queries:
         print("=" * 60)
         print(f"Query: {query}\n")
@@ -58,7 +58,7 @@ def main() -> None:
         print(f"\nSources: {', '.join(result['sources'])}\n")
 
     print("=" * 60)
-    print("Gemini Integration Test: PASSED")
+    print("LLM Integration Test: PASSED")
     print("=" * 60)
 
 

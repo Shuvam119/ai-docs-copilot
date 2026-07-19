@@ -146,10 +146,10 @@ class IndexBuilder:
                 "No indexed documents found. Upload documents and rebuild the index."
             )
 
-        from src.gemini import GeminiLLM
+        from src.llm import LLMClient
         from src.rag import RAGPipeline
         from src.retriever import Retriever
 
         retriever = Retriever(self.embedder, self.vector_store)
-        llm = GeminiLLM()
+        llm = LLMClient()
         return RAGPipeline(self.embedder, retriever, llm)

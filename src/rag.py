@@ -19,7 +19,7 @@ class RAGPipeline:
         Args:
             embedder: EmbeddingsGenerator instance
             retriever: Retriever instance
-            llm: GeminiLLM instance
+            llm: LLMClient instance
         """
         self.embedder = embedder
         self.retriever = retriever
