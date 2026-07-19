@@ -6,7 +6,7 @@ Orchestrates document loading, chunking, embedding, and vector store indexing.
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from src.chunker import DocumentChunker
 from src.config import (
@@ -81,12 +81,17 @@ class IndexBuilder:
             )
         return self._vector_store
 
-    def build(self, rebuild: bool = True) -> IndexStats:
+    def build(
+        self,
+        rebuild: bool = True,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> IndexStats:
         """
         Build the vector index from documents in the raw data directory.
 
         Args:
             rebuild: If True, clear the existing collection before indexing
+            progress_callback: Receives a percentage and status while indexing
 
         Returns:
             IndexStats with document and chunk counts
@@ -94,6 +99,11 @@ class IndexBuilder:
         Raises:
             ValueError: If no documents are found
         """
+        def report_progress(percentage: int, status: str) -> None:
+            if progress_callback:
+                progress_callback(percentage, status)
+
+        report_progress(5, "Reading source documents")
         logger.info("Loading documents from %s", self.raw_data_dir)
         documents = load_documents_from_directory(self.raw_data_dir)
 
@@ -103,19 +113,24 @@ class IndexBuilder:
                 "Upload documents before building the index."
             )
 
+        report_progress(20, "Preparing document content")
         filenames = [doc["metadata"]["filename"] for doc in documents]
         logger.info("Loaded %d document(s)", len(documents))
 
         chunks = self.chunker.chunk_documents(documents)
         logger.info("Created %d chunk(s)", len(chunks))
 
+        report_progress(40, "Creating semantic embeddings")
         chunks_with_embeddings = self.embedder.embed_chunks(chunks)
 
         if rebuild:
+            report_progress(75, "Refreshing the knowledge index")
             self.vector_store.clear_collection()
 
+        report_progress(85, "Saving searchable knowledge")
         added = self.vector_store.add_chunks(chunks_with_embeddings)
         logger.info("Indexed %d chunk(s) into vector store", added)
+        report_progress(100, "Knowledge index is ready")
 
         return IndexStats(
             document_count=len(documents),

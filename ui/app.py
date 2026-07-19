@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-"""
-Streamlit Web App - AI Documentation Copilot
-"""
+"""Streamlit application for the AI Documentation Copilot."""
 
+import html
 import logging
 import os
 import sys
@@ -24,12 +22,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="AI Docs Copilot",
+    page_title="Knowledge Copilot",
     page_icon="📚",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+st.markdown(
+    """
+    <style>
+        .stApp { background: #f7f8fc; }
+        [data-testid="stSidebar"] { background: #111a33; }
+        [data-testid="stSidebar"] * { color: #f6f8ff; }
+        .hero {
+            background: radial-gradient(circle at 85% 20%, #5f7cff 0, transparent 30%),
+                        linear-gradient(120deg, #121c38 0%, #253b82 100%);
+            border-radius: 22px;
+            color: white;
+            padding: 2.25rem 2.5rem;
+            margin: 0.25rem 0 1.75rem;
+            box-shadow: 0 16px 35px rgba(26, 47, 107, 0.18);
+        }
+        .eyebrow { color: #b8c6ff; font-size: .78rem; font-weight: 700; letter-spacing: .12em; }
+        .hero h1 { font-size: 2.25rem; margin: .4rem 0 .55rem; }
+        .hero p { color: #e4eaff; font-size: 1.04rem; margin: 0; max-width: 42rem; }
+        .metric-card {
+            background: white; border: 1px solid #e5e9f2; border-radius: 14px;
+            padding: 1rem 1.1rem; margin-bottom: .65rem;
+        }
+        .metric-label { color: #667085; font-size: .77rem; font-weight: 700; text-transform: uppercase; }
+        .metric-value { color: #172554; font-size: 1.55rem; font-weight: 750; margin-top: .2rem; }
+        .source-card {
+            border-left: 3px solid #6079ee; background: #f6f8ff; border-radius: 0 10px 10px 0;
+            padding: .7rem .85rem; margin: .5rem 0;
+        }
+        .source-name { color: #253b82; font-size: .82rem; font-weight: 700; }
+        .source-text { color: #475467; font-size: .9rem; margin-top: .25rem; }
+        .welcome-card { background: white; border: 1px dashed #c7d2fe; border-radius: 16px; padding: 2rem; text-align: center; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource
@@ -39,214 +74,197 @@ def get_index_builder() -> IndexBuilder:
 
 
 def save_uploaded_files(uploaded_files) -> list[str]:
-    """
-    Save uploaded files to data/raw/.
-
-    Args:
-        uploaded_files: Streamlit UploadedFile objects
-
-    Returns:
-        List of saved filenames
-    """
-    saved: list[str] = []
+    """Save supported uploaded files and return their names."""
+    saved = []
     for uploaded_file in uploaded_files:
-        suffix = Path(uploaded_file.name).suffix.lower()
-        if suffix not in SUPPORTED_EXTENSIONS:
+        if Path(uploaded_file.name).suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-
-        destination = RAW_DATA_DIR / uploaded_file.name
-        destination.write_bytes(uploaded_file.getbuffer())
+        (RAW_DATA_DIR / uploaded_file.name).write_bytes(uploaded_file.getbuffer())
         saved.append(uploaded_file.name)
-        logger.info("Saved uploaded file: %s", uploaded_file.name)
-
     return saved
 
 
+def clear_session() -> None:
+    """Clear conversation and in-memory state without deleting the knowledge index."""
+    st.session_state.clear()
+    st.rerun()
+
+
 def rebuild_index(builder: IndexBuilder) -> bool:
-    """
-    Rebuild the vector index and refresh the RAG pipeline.
+    """Rebuild the index while presenting meaningful progress to the user."""
+    progress_bar = st.progress(0, text="Preparing your knowledge workspace")
+    status = st.empty()
 
-    Args:
-        builder: IndexBuilder instance
+    def update_progress(percentage: int, message: str) -> None:
+        progress_bar.progress(percentage, text=message)
+        status.caption(f"{percentage}% · {message}")
 
-    Returns:
-        True if rebuild succeeded
-    """
     try:
-        with st.spinner("Rebuilding index..."):
-            builder.build(rebuild=True)
-            st.session_state.rag_pipeline = builder.create_rag_pipeline()
-            st.session_state.index_stats = builder.get_stats()
-            st.session_state.index_ready = True
+        stats = builder.build(rebuild=True, progress_callback=update_progress)
+        st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        st.session_state.index_stats = builder.get_stats()
+        st.session_state.index_ready = True
+        progress_bar.progress(100, text="Knowledge index ready")
+        status.success(f"Indexed {stats.document_count} document(s) into {stats.chunk_count} searchable chunks.")
         return True
     except ValueError as exc:
-        st.error(str(exc))
         st.session_state.rag_pipeline = None
         st.session_state.index_ready = False
-        st.session_state.index_stats = builder.get_stats()
+        st.error(str(exc))
         return False
     except Exception as exc:
         logger.exception("Index rebuild failed")
-        st.error(f"Failed to rebuild index: {exc}")
+        st.error(f"Indexing could not be completed: {exc}")
         return False
 
 
 def load_existing_pipeline(builder: IndexBuilder) -> None:
-    """Load an existing index into the RAG pipeline if available."""
+    """Load the persistent index into a usable RAG pipeline when available."""
     stats = builder.get_stats()
     st.session_state.index_stats = stats
-
-    if stats["total_chunks"] == 0:
+    if not stats["total_chunks"]:
         st.session_state.rag_pipeline = None
         st.session_state.index_ready = False
         return
-
     try:
         st.session_state.rag_pipeline = builder.create_rag_pipeline()
         st.session_state.index_ready = True
     except ValueError as exc:
+        logger.warning("Could not load pipeline: %s", exc)
         st.session_state.rag_pipeline = None
         st.session_state.index_ready = False
-        logger.warning("Could not load pipeline: %s", exc)
 
 
-def render_retrieved_chunks(chunks: list[dict]) -> None:
-    """Render expandable retrieved chunk details."""
-    with st.expander("Retrieved Chunks", expanded=False):
-        if not chunks:
-            st.write("No chunks retrieved.")
-            return
-
-        for idx, chunk in enumerate(chunks, 1):
-            metadata = chunk.get("metadata", {})
-            filename = metadata.get("filename", "unknown")
-            chunk_id = metadata.get("chunk_id", chunk.get("id", f"chunk_{idx}"))
-            similarity = chunk.get("similarity", 0.0)
-
-            st.markdown(f"**Chunk {idx}** — `{filename}` (`{chunk_id}`)")
-            st.caption(f"Similarity: {similarity:.3f}")
-            st.text(chunk.get("text", ""))
-            if idx < len(chunks):
-                st.divider()
+def snippet(text: str, limit: int = 320) -> str:
+    """Return a compact, single-line source preview."""
+    compact = " ".join(text.split())
+    return compact if len(compact) <= limit else f"{compact[:limit].rstrip()}…"
 
 
-# Session state initialization
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "rag_pipeline" not in st.session_state:
-    st.session_state.rag_pipeline = None
-if "index_ready" not in st.session_state:
-    st.session_state.index_ready = False
-if "index_stats" not in st.session_state:
-    st.session_state.index_stats = {
-        "document_count": 0,
-        "total_chunks": 0,
-    }
+def render_source_snippets(chunks: list[dict]) -> None:
+    """Display the retrieved evidence directly beneath an answer."""
+    if not chunks:
+        return
+    st.caption("Grounded in the following source excerpts")
+    for chunk in chunks[:3]:
+        metadata = chunk.get("metadata", {})
+        filename = html.escape(str(metadata.get("filename", "Unknown source")))
+        chunk_id = html.escape(str(metadata.get("chunk_id", "")))
+        excerpt = html.escape(snippet(chunk.get("text", "")))
+        st.markdown(
+            f'<div class="source-card"><div class="source-name">{filename} · {chunk_id}</div>'
+            f'<div class="source-text">{excerpt}</div></div>',
+            unsafe_allow_html=True,
+        )
+    if len(chunks) > 3:
+        with st.expander(f"View {len(chunks) - 3} more source excerpt(s)"):
+            for chunk in chunks[3:]:
+                metadata = chunk.get("metadata", {})
+                st.markdown(f"**{metadata.get('filename', 'Unknown source')}**")
+                st.write(snippet(chunk.get("text", ""), 600))
+
+
+for key, value in {
+    "messages": [],
+    "rag_pipeline": None,
+    "index_ready": False,
+    "index_stats": {"document_count": 0, "total_chunks": 0},
+}.items():
+    st.session_state.setdefault(key, value)
+
+builder = get_index_builder()
 if "pipeline_loaded" not in st.session_state:
-    builder = get_index_builder()
     load_existing_pipeline(builder)
     st.session_state.pipeline_loaded = True
 
-
-builder = get_index_builder()
 stats = st.session_state.index_stats
 
-# Sidebar
 with st.sidebar:
-    st.header("Index")
-
-    st.metric("Indexed Documents", stats.get("document_count", 0))
-    st.metric("Indexed Chunks", stats.get("total_chunks", 0))
-
-    if st.button("Rebuild Index", use_container_width=True):
-        if rebuild_index(builder):
-            st.success("Index rebuilt successfully.")
-            st.rerun()
-
+    st.markdown("## ✦ Knowledge Copilot")
+    st.caption("Enterprise document intelligence")
     st.divider()
+    st.markdown('<div class="metric-card"><div class="metric-label">Documents indexed</div><div class="metric-value">{}</div></div>'.format(stats.get("document_count", 0)), unsafe_allow_html=True)
+    st.markdown('<div class="metric-card"><div class="metric-label">Searchable chunks</div><div class="metric-value">{}</div></div>'.format(stats.get("total_chunks", 0)), unsafe_allow_html=True)
+    st.divider()
+    top_k = st.slider("Sources per answer", 1, 10, TOP_K, help="Controls how many document passages are considered for each answer.")
+    if st.button("↻ Rebuild knowledge index", use_container_width=True):
+        rebuild_index(builder)
+    if st.button("Clear session", use_container_width=True, type="secondary"):
+        clear_session()
+    st.caption("Clearing a session keeps your indexed documents intact.")
 
-    top_k = st.slider("Retrieved Chunks (Top K)", 1, 10, TOP_K)
-
-    if st.button("Clear Chat", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
-
-# Main page
-st.title("AI Documentation Copilot")
 st.markdown(
-    "Upload PDF or DOCX documents, then ask questions grounded in your documentation."
+    """
+    <section class="hero">
+      <div class="eyebrow">KNOWLEDGE, MADE CONVERSATIONAL</div>
+      <h1>Your documentation, ready to answer.</h1>
+      <p>Ask precise questions across your trusted internal documents. Every response is grounded in retrieved source material.</p>
+    </section>
+    """,
+    unsafe_allow_html=True,
 )
 
-st.subheader("Upload Documents")
-uploaded_files = st.file_uploader(
-    "Upload PDF or DOCX files",
-    type=["pdf", "docx"],
-    accept_multiple_files=True,
-)
+upload_col, summary_col = st.columns([2.2, 1])
+with upload_col:
+    uploaded_files = st.file_uploader(
+        "Add knowledge sources",
+        type=["pdf", "docx"],
+        accept_multiple_files=True,
+        help="Upload PDF or DOCX files to add them to the knowledge index.",
+    )
+with summary_col:
+    state_label = "Ready to answer" if st.session_state.index_ready else "Index needed"
+    st.info(f"**{state_label}**\n\nPDF and DOCX sources are supported.")
 
-if uploaded_files and st.button("Save and Index Documents", use_container_width=True):
+if uploaded_files and st.button("Index uploaded documents", type="primary"):
     saved = save_uploaded_files(uploaded_files)
-    if saved:
-        if rebuild_index(builder):
-            st.success(
-                f"Successfully indexed {len(saved)} file(s): "
-                f"{', '.join(saved)}"
-            )
-            st.rerun()
-    else:
-        st.warning("No supported files were uploaded. Only PDF and DOCX are accepted.")
+    if saved and rebuild_index(builder):
+        st.success(f"Added {len(saved)} document(s): {', '.join(saved)}")
+        st.rerun()
+    if not saved:
+        st.warning("No supported files were selected.")
 
 st.divider()
 
 if not st.session_state.index_ready:
-    st.info(
-        "Upload PDF or DOCX files above to build the index, "
-        "or click **Rebuild Index** in the sidebar if documents already exist in `data/raw/`."
+    st.markdown(
+        """
+        <div class="welcome-card">
+          <h3>Build your knowledge workspace</h3>
+          <p>Upload a document above or select <b>Rebuild knowledge index</b> to begin asking grounded questions.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 else:
-    st.subheader("Ask a Question")
-
+    st.markdown("### Ask your knowledge base")
+    st.caption("Answers cite the passages used to generate them.")
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
+        avatar = "🤖" if message["role"] == "assistant" else "👤"
+        with st.chat_message(message["role"], avatar=avatar):
             st.write(message["content"])
             if message["role"] == "assistant":
-                if message.get("sources"):
-                    st.markdown("**Sources:** " + ", ".join(message["sources"]))
-                if message.get("retrieved_chunks"):
-                    render_retrieved_chunks(message["retrieved_chunks"])
+                render_source_snippets(message.get("retrieved_chunks", []))
 
-    query = st.chat_input("Ask about your documents...")
-
+    query = st.chat_input("Ask a question about your documentation")
     if query:
         st.session_state.messages.append({"role": "user", "content": query})
-
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="👤"):
             st.write(query)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Searching documents and generating answer..."):
+        with st.chat_message("assistant", avatar="🤖"):
+            with st.spinner("Finding trusted evidence and drafting an answer…"):
                 try:
                     result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
-                    answer = result["answer"]
-                    sources = result["sources"]
-                    retrieved_chunks = result["retrieved_chunks"]
-
-                    st.write(answer)
-
-                    if sources:
-                        st.markdown("**Sources:** " + ", ".join(sources))
-
-                    render_retrieved_chunks(retrieved_chunks)
-
+                    st.write(result["answer"])
+                    render_source_snippets(result["retrieved_chunks"])
                     st.session_state.messages.append(
                         {
                             "role": "assistant",
-                            "content": answer,
-                            "sources": sources,
-                            "retrieved_chunks": retrieved_chunks,
+                            "content": result["answer"],
+                            "retrieved_chunks": result["retrieved_chunks"],
                         }
                     )
                 except Exception as exc:
                     logger.exception("Question answering failed")
-                    st.error(f"Error: {exc}")
+                    st.error(f"Unable to answer this question: {exc}")
                     st.session_state.messages.pop()
