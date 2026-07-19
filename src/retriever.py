@@ -6,7 +6,7 @@ Retrieves relevant document chunks for a given query using semantic search.
 
 from typing import Dict, List
 
-from src.config import TOP_K
+from src.config import SIMILARITY_THRESHOLD, TOP_K
 
 
 class Retriever:
@@ -34,8 +34,7 @@ class Retriever:
         Returns:
             List of relevant chunks with metadata and similarity scores
         """
-        # Generate embedding for query
-        query_embedding = self.embedder.embed_text(query)
+        query_embedding = self.embedder.embed_text(query, is_query=True)
         query_embedding_list = query_embedding.tolist()
 
         # Search vector database
@@ -61,15 +60,20 @@ class Retriever:
         sources = set()
 
         for result in results:
-            context_parts.append(result["text"])
-            sources.add(result["metadata"]["filename"])
+            filename = result["metadata"]["filename"]
+            context_parts.append(f"[Source: {filename}]\n{result['text']}")
+            sources.add(filename)
 
         context = "\n\n---\n\n".join(context_parts)
+        best_similarity = max((r["similarity"] for r in results), default=0.0)
+        low_confidence = not results or best_similarity < SIMILARITY_THRESHOLD
 
         return {
             "query": query,
             "context": context,
             "sources": list(sources),
             "retrieved_chunks": results,
-            "num_chunks": len(results)
+            "num_chunks": len(results),
+            "best_similarity": best_similarity,
+            "low_confidence": low_confidence,
         }

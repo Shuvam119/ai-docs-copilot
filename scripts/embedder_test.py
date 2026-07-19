@@ -17,7 +17,8 @@ def main() -> None:
     print("Embeddings Generator Test")
     print("=" * 60)
 
-    documents = load_documents_from_directory(str(RAW_DATA_DIR))
+    load_result = load_documents_from_directory(str(RAW_DATA_DIR))
+    documents = load_result.documents
     if not documents:
         print("No documents loaded. Run: python scripts/create_samples.py")
         return

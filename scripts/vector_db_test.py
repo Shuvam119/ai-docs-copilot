@@ -25,7 +25,7 @@ def main() -> None:
     print(f"  Path: {store_stats['vectorstore_path']}")
 
     query = "API authentication"
-    query_embedding = builder.embedder.embed_text(query).tolist()
+    query_embedding = builder.embedder.embed_text(query, is_query=True).tolist()
     results = builder.vector_store.search(query_embedding, top_k=3)
 
     print(f"\nTop 3 similar chunks for query: '{query}'")

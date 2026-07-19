@@ -90,6 +90,26 @@ def clear_session() -> None:
     st.rerun()
 
 
+def has_api_key() -> bool:
+    """Return True when a Groq API key is configured."""
+    key = os.getenv("GROQ_API_KEY", "")
+    return bool(key and key.startswith("gsk_"))
+
+
+def show_index_warnings(stats) -> None:
+    """Surface partial indexing failures and empty-document warnings."""
+    if stats.failed_files:
+        st.warning(
+            "Some files could not be indexed:\n\n"
+            + "\n".join(f"- {name}" for name in stats.failed_files)
+        )
+    if stats.empty_files:
+        st.warning(
+            "These files had no extractable text (they may be scanned/image-only):\n\n"
+            + "\n".join(f"- {name}" for name in stats.empty_files)
+        )
+
+
 def rebuild_index(builder: IndexBuilder) -> bool:
     """Rebuild the index while presenting meaningful progress to the user."""
     progress_bar = st.progress(0, text="Preparing your knowledge workspace")
@@ -101,11 +121,17 @@ def rebuild_index(builder: IndexBuilder) -> bool:
 
     try:
         stats = builder.build(rebuild=True, progress_callback=update_progress)
-        st.session_state.rag_pipeline = builder.create_rag_pipeline()
         st.session_state.index_stats = builder.get_stats()
         st.session_state.index_ready = True
+        if has_api_key():
+            st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        else:
+            st.session_state.rag_pipeline = None
         progress_bar.progress(100, text="Knowledge index ready")
-        status.success(f"Indexed {stats.document_count} document(s) into {stats.chunk_count} searchable chunks.")
+        status.success(
+            f"Indexed {stats.document_count} document(s) into {stats.chunk_count} searchable chunks."
+        )
+        show_index_warnings(stats)
         return True
     except ValueError as exc:
         st.session_state.rag_pipeline = None
@@ -126,13 +152,17 @@ def load_existing_pipeline(builder: IndexBuilder) -> None:
         st.session_state.rag_pipeline = None
         st.session_state.index_ready = False
         return
+
+    st.session_state.index_ready = True
+    if not has_api_key():
+        st.session_state.rag_pipeline = None
+        return
+
     try:
         st.session_state.rag_pipeline = builder.create_rag_pipeline()
-        st.session_state.index_ready = True
     except ValueError as exc:
         logger.warning("Could not load pipeline: %s", exc)
         st.session_state.rag_pipeline = None
-        st.session_state.index_ready = False
 
 
 def snippet(text: str, limit: int = 320) -> str:
@@ -150,9 +180,13 @@ def render_source_snippets(chunks: list[dict]) -> None:
         metadata = chunk.get("metadata", {})
         filename = html.escape(str(metadata.get("filename", "Unknown source")))
         chunk_id = html.escape(str(metadata.get("chunk_id", "")))
+        similarity = chunk.get("similarity")
+        match_label = (
+            f" · {similarity * 100:.0f}% match" if similarity is not None else ""
+        )
         excerpt = html.escape(snippet(chunk.get("text", "")))
         st.markdown(
-            f'<div class="source-card"><div class="source-name">{filename} · {chunk_id}</div>'
+            f'<div class="source-card"><div class="source-name">{filename} · {chunk_id}{match_label}</div>'
             f'<div class="source-text">{excerpt}</div></div>',
             unsafe_allow_html=True,
         )
@@ -160,7 +194,13 @@ def render_source_snippets(chunks: list[dict]) -> None:
         with st.expander(f"View {len(chunks) - 3} more source excerpt(s)"):
             for chunk in chunks[3:]:
                 metadata = chunk.get("metadata", {})
-                st.markdown(f"**{metadata.get('filename', 'Unknown source')}**")
+                similarity = chunk.get("similarity")
+                match_label = (
+                    f" ({similarity * 100:.0f}% match)" if similarity is not None else ""
+                )
+                st.markdown(
+                    f"**{metadata.get('filename', 'Unknown source')}**{match_label}"
+                )
                 st.write(snippet(chunk.get("text", ""), 600))
 
 
@@ -168,7 +208,7 @@ for key, value in {
     "messages": [],
     "rag_pipeline": None,
     "index_ready": False,
-    "index_stats": {"document_count": 0, "total_chunks": 0},
+    "index_stats": {"document_count": 0, "total_chunks": 0, "filenames": []},
 }.items():
     st.session_state.setdefault(key, value)
 
@@ -182,9 +222,16 @@ stats = st.session_state.index_stats
 with st.sidebar:
     st.markdown("## ✦ Knowledge Copilot")
     st.caption("Enterprise document intelligence")
+    if not has_api_key():
+        st.error("GROQ_API_KEY is missing. Add it to `.env` to enable answers.")
     st.divider()
     st.markdown('<div class="metric-card"><div class="metric-label">Documents indexed</div><div class="metric-value">{}</div></div>'.format(stats.get("document_count", 0)), unsafe_allow_html=True)
     st.markdown('<div class="metric-card"><div class="metric-label">Searchable chunks</div><div class="metric-value">{}</div></div>'.format(stats.get("total_chunks", 0)), unsafe_allow_html=True)
+    indexed_files = stats.get("filenames", [])
+    if indexed_files:
+        with st.expander(f"Indexed files ({len(indexed_files)})"):
+            for name in indexed_files:
+                st.caption(f"📄 {name}")
     st.divider()
     top_k = st.slider("Sources per answer", 1, 10, TOP_K, help="Controls how many document passages are considered for each answer.")
     if st.button("↻ Rebuild knowledge index", use_container_width=True):
@@ -244,27 +291,44 @@ else:
         with st.chat_message(message["role"], avatar=avatar):
             st.write(message["content"])
             if message["role"] == "assistant":
+                if message.get("low_confidence"):
+                    st.warning(
+                        "No strong match was found in your documents. "
+                        "The answer may be unreliable."
+                    )
                 render_source_snippets(message.get("retrieved_chunks", []))
 
     query = st.chat_input("Ask a question about your documentation")
     if query:
-        st.session_state.messages.append({"role": "user", "content": query})
-        with st.chat_message("user", avatar="👤"):
-            st.write(query)
-        with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("Finding trusted evidence and drafting an answer…"):
-                try:
-                    result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
-                    st.write(result["answer"])
-                    render_source_snippets(result["retrieved_chunks"])
-                    st.session_state.messages.append(
-                        {
-                            "role": "assistant",
-                            "content": result["answer"],
-                            "retrieved_chunks": result["retrieved_chunks"],
-                        }
-                    )
-                except Exception as exc:
-                    logger.exception("Question answering failed")
-                    st.error(f"Unable to answer this question: {exc}")
-                    st.session_state.messages.pop()
+        if not has_api_key():
+            st.error("Add GROQ_API_KEY to `.env` before asking questions.")
+        elif st.session_state.rag_pipeline is None:
+            st.session_state.rag_pipeline = builder.create_rag_pipeline()
+
+        if has_api_key() and st.session_state.rag_pipeline:
+            st.session_state.messages.append({"role": "user", "content": query})
+            with st.chat_message("user", avatar="👤"):
+                st.write(query)
+            with st.chat_message("assistant", avatar="🤖"):
+                with st.spinner("Finding trusted evidence and drafting an answer…"):
+                    try:
+                        result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
+                        if result.get("low_confidence"):
+                            st.warning(
+                                "No strong match was found in your documents. "
+                                "The answer may be unreliable."
+                            )
+                        st.write(result["answer"])
+                        render_source_snippets(result["retrieved_chunks"])
+                        st.session_state.messages.append(
+                            {
+                                "role": "assistant",
+                                "content": result["answer"],
+                                "retrieved_chunks": result["retrieved_chunks"],
+                                "low_confidence": result.get("low_confidence", False),
+                            }
+                        )
+                    except Exception as exc:
+                        logger.exception("Question answering failed")
+                        st.error(f"Unable to answer this question: {exc}")
+                        st.session_state.messages.pop()

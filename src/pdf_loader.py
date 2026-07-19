@@ -35,7 +35,7 @@ def load_pdf(file_path: str) -> Dict:
         for page_num, page in enumerate(doc, 1):
             text = page.get_text()
             if text.strip():
-                text_content.append(text)
+                text_content.append(f"--- Page {page_num} ---\n{text}")
 
         full_text = "\n".join(text_content)
         doc.close()
@@ -47,7 +47,8 @@ def load_pdf(file_path: str) -> Dict:
                 "source": str(file_path),
                 "type": "pdf",
                 "filename": file_path.name,
-                "pages": page_count
+                "pages": page_count,
+                "empty_text": not full_text.strip(),
             }
         }
 

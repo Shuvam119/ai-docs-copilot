@@ -133,6 +133,7 @@ class VectorStore:
         """Get vector store statistics."""
         count = self.collection.count()
         document_count = 0
+        filenames: set[str] = set()
 
         if count > 0:
             all_metadata = self.collection.get(include=["metadatas"])
@@ -147,6 +148,7 @@ class VectorStore:
             "collection": self.collection_name,
             "total_chunks": count,
             "document_count": document_count,
+            "filenames": sorted(filenames),
             "vectorstore_path": str(self.vectorstore_path),
         }
 

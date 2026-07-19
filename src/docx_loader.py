@@ -35,6 +35,16 @@ def load_docx(file_path: str) -> Dict:
             if para.text.strip():
                 paragraphs.append(para.text)
 
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [
+                    cell.text.strip()
+                    for cell in row.cells
+                    if cell.text.strip()
+                ]
+                if cells:
+                    paragraphs.append(" | ".join(cells))
+
         full_text = "\n".join(paragraphs)
 
         return {
@@ -44,7 +54,8 @@ def load_docx(file_path: str) -> Dict:
                 "source": str(file_path),
                 "type": "docx",
                 "filename": file_path.name,
-                "paragraphs": len(paragraphs)
+                "paragraphs": len(paragraphs),
+                "empty_text": not full_text.strip(),
             }
         }
 

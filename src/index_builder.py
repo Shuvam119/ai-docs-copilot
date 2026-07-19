@@ -5,7 +5,7 @@ Orchestrates document loading, chunking, embedding, and vector store indexing.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from src.chunker import DocumentChunker
@@ -31,6 +31,8 @@ class IndexStats:
     document_count: int
     chunk_count: int
     filenames: List[str]
+    failed_files: List[str] = field(default_factory=list)
+    empty_files: List[str] = field(default_factory=list)
 
 
 class IndexBuilder:
@@ -105,12 +107,17 @@ class IndexBuilder:
 
         report_progress(5, "Reading source documents")
         logger.info("Loading documents from %s", self.raw_data_dir)
-        documents = load_documents_from_directory(self.raw_data_dir)
+        load_result = load_documents_from_directory(self.raw_data_dir)
+        documents = load_result.documents
 
         if not documents:
+            detail = ""
+            if load_result.failed_files:
+                detail = f" Failed files: {'; '.join(load_result.failed_files)}"
             raise ValueError(
                 "No PDF or DOCX documents found in data/raw/. "
                 "Upload documents before building the index."
+                + detail
             )
 
         report_progress(20, "Preparing document content")
@@ -136,6 +143,8 @@ class IndexBuilder:
             document_count=len(documents),
             chunk_count=added,
             filenames=filenames,
+            failed_files=load_result.failed_files,
+            empty_files=load_result.empty_files,
         )
 
     def get_stats(self) -> Dict:

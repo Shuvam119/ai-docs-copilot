@@ -57,4 +57,6 @@ class RAGPipeline:
             "sources": llm_result["sources"],
             "retrieved_chunks": retrieval["retrieved_chunks"],
             "num_chunks": retrieval["num_chunks"],
+            "low_confidence": retrieval["low_confidence"],
+            "best_similarity": retrieval["best_similarity"],
         }

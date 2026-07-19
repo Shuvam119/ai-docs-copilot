@@ -24,11 +24,17 @@ def main() -> None:
         print("Run: python scripts/create_samples.py")
         return
 
-    documents = load_documents_from_directory(str(RAW_DATA_DIR))
+    load_result = load_documents_from_directory(str(RAW_DATA_DIR))
+    documents = load_result.documents
     if not documents:
         print("No supported documents found (.pdf or .docx)")
         print(f"Found files: {[path.name for path in all_files]}")
         return
+
+    if load_result.failed_files:
+        print(f"Failed files: {load_result.failed_files}")
+    if load_result.empty_files:
+        print(f"Empty files: {load_result.empty_files}")
 
     print(f"Successfully loaded {len(documents)} document(s)\n")
 
