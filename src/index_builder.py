@@ -6,6 +6,7 @@ Orchestrates document loading, chunking, embedding, and vector store indexing.
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from src.chunker import DocumentChunker
@@ -20,6 +21,7 @@ from src.config import (
 from src.embedder import EmbeddingsGenerator
 from src.load_document import load_documents_from_directory
 from src.vector_db import VectorStore
+from src.metadata import extract_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,7 @@ class IndexBuilder:
 
     def build(
         self,
-        rebuild: bool = True,
+        rebuild: bool = False,
         progress_callback: Optional[Callable[[int, str], None]] = None,
     ) -> IndexStats:
         """
@@ -120,19 +122,39 @@ class IndexBuilder:
                 + detail
             )
 
-        report_progress(20, "Preparing document content")
+        report_progress(20, "Extracting enterprise metadata")
+        for document in documents:
+            document["metadata"].update(extract_metadata(document))
         filenames = [doc["metadata"]["filename"] for doc in documents]
         logger.info("Loaded %d document(s)", len(documents))
 
+        if rebuild:
+            self.vector_store.clear_collection()
+            existing_filenames: set[str] = set()
+        else:
+            existing_stats = self.vector_store.get_stats()
+            existing_filenames = set(existing_stats["filenames"])
+            required_fields = {"title", "product", "version", "document_type", "audience", "department", "keywords", "summary"}
+            legacy_documents = {
+                item["filename"] for item in existing_stats.get("documents", [])
+                if not required_fields.issubset(item)
+            }
+            for filename in legacy_documents:
+                self.vector_store.delete_document(filename)
+            documents = [
+                doc for doc in documents
+                if doc["metadata"]["filename"] not in existing_filenames
+                or doc["metadata"]["filename"] in legacy_documents
+            ]
+        if not documents:
+            report_progress(100, "All documents are already indexed")
+            stats = self.vector_store.get_stats()
+            return IndexStats(len(filenames), 0, filenames, load_result.failed_files, load_result.empty_files)
         chunks = self.chunker.chunk_documents(documents)
         logger.info("Created %d chunk(s)", len(chunks))
 
-        report_progress(40, "Creating semantic embeddings")
+        report_progress(40, "Creating semantic embeddings for new documents")
         chunks_with_embeddings = self.embedder.embed_chunks(chunks)
-
-        if rebuild:
-            report_progress(75, "Refreshing the knowledge index")
-            self.vector_store.clear_collection()
 
         report_progress(85, "Saving searchable knowledge")
         added = self.vector_store.add_chunks(chunks_with_embeddings)
@@ -140,7 +162,7 @@ class IndexBuilder:
         report_progress(100, "Knowledge index is ready")
 
         return IndexStats(
-            document_count=len(documents),
+            document_count=len(filenames),
             chunk_count=added,
             filenames=filenames,
             failed_files=load_result.failed_files,
@@ -150,6 +172,49 @@ class IndexBuilder:
     def get_stats(self) -> Dict:
         """Return current vector store statistics."""
         return self.vector_store.get_stats()
+
+    def delete_document(self, filename: str, delete_source: bool = True) -> int:
+        """Remove an indexed document and, optionally, its uploaded source file."""
+        removed = self.vector_store.delete_document(filename)
+        if delete_source:
+            source = Path(self.raw_data_dir) / filename
+            if source.exists():
+                source.unlink()
+        return removed
+
+    def clear_repository(self, delete_sources: bool = False) -> None:
+        """Clear the index and optionally remove uploaded source files."""
+        self.vector_store.clear_collection()
+        if delete_sources:
+            for source in Path(self.raw_data_dir).iterdir():
+                if source.suffix.lower() in {".pdf", ".docx"}:
+                    source.unlink()
+
+    def compare_documents(self, left: str, right: str) -> Dict:
+        """Compare indexed document content using chunk-level sequence matching."""
+        from difflib import SequenceMatcher
+        left_chunks, right_chunks = self.vector_store.document_chunks(left), self.vector_store.document_chunks(right)
+        left_text, right_text = "\n".join(c["text"] for c in left_chunks), "\n".join(c["text"] for c in right_chunks)
+        matcher = SequenceMatcher(None, left_text.splitlines(), right_text.splitlines())
+        additions, removals, changes = [], [], []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "insert": additions.extend(right_text.splitlines()[j1:j2][:5])
+            elif tag == "delete": removals.extend(left_text.splitlines()[i1:i2][:5])
+            elif tag == "replace": changes.append(" ".join(right_text.splitlines()[j1:j2])[:300])
+        return {"similarity": round(matcher.ratio() * 100), "additions": additions[:10], "removed_sections": removals[:10], "changed_procedures": changes[:10]}
+
+    def find_duplicates(self, filename: str, threshold: float) -> List[Dict]:
+        """Find semantic near-duplicates for a newly indexed/uploaded document."""
+        source = Path(self.raw_data_dir) / filename
+        if not source.exists() or not self.vector_store.get_stats()["total_chunks"]:
+            return []
+        document = load_documents_from_directory(self.raw_data_dir).documents
+        candidate = next((item for item in document if item["metadata"]["filename"] == filename), None)
+        if not candidate:
+            return []
+        vector = self.embedder.embed_text(candidate["text"][:4000], is_query=True).tolist()
+        matches = self.vector_store.search(vector, top_k=5)
+        return [match for match in matches if match["metadata"]["filename"] != filename and match["similarity"] >= threshold]
 
     def has_index(self) -> bool:
         """Return True if the vector store contains indexed chunks."""

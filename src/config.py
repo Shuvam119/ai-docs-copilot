@@ -20,6 +20,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 COLLECTION_NAME = "documents"
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.5"))
+DUPLICATE_THRESHOLD = float(os.getenv("DUPLICATE_THRESHOLD", "0.88"))
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 

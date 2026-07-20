@@ -8,7 +8,9 @@ A production-quality RAG (Retrieval-Augmented Generation) proof of concept for t
 - Local embeddings with `BAAI/bge-small-en-v1.5`
 - Persistent vector search with ChromaDB
 - Grounded answers via an LLM provider (Groq by default)
-- Streamlit UI with upload, index rebuild, and retrieved chunk inspection
+- Enterprise metadata extraction (product, version, document type, audience, department, keywords, and summary)
+- Metadata-aware retrieval, audience-adapted answers, confidence scoring, and related-document recommendations
+- Incremental indexing, duplicate warnings, knowledge cards, document comparison, and live repository management
 
 ## Tech Stack
 
@@ -83,6 +85,10 @@ python scripts/build_index.py
 ```
 
 The persistent Chroma database is stored at `vectorstore/chroma_db/`.
+
+## Migration notes
+
+Existing indexes remain readable. Run **Rebuild knowledge index** once after upgrading to populate enterprise metadata for existing chunks. No new dependencies are required.
 
 ## Project structure
 

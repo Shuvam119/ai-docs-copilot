@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
-from src.config import RAW_DATA_DIR, SUPPORTED_EXTENSIONS, TOP_K
+from src.config import DUPLICATE_THRESHOLD, RAW_DATA_DIR, SUPPORTED_EXTENSIONS, TOP_K
 from src.index_builder import IndexBuilder
 
 logging.basicConfig(
@@ -35,7 +35,20 @@ st.markdown(
     <style>
         .stApp { background: #f7f8fc; }
         [data-testid="stSidebar"] { background: #111a33; }
-        [data-testid="stSidebar"] * { color: #f6f8ff; }
+        [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] .stCaption { color: #e8edff !important; }
+        [data-testid="stSidebar"] [data-baseweb="select"] > div,
+        [data-testid="stSidebar"] [data-baseweb="input"] > div {
+            background: #ffffff !important; border: 1px solid #7f93e8 !important;
+        }
+        [data-testid="stSidebar"] [data-baseweb="select"] *,
+        [data-testid="stSidebar"] [data-baseweb="input"] input {
+            color: #172554 !important;
+        }
+        [data-testid="stSidebar"] [data-baseweb="select"] svg { fill: #172554 !important; }
+        [data-testid="stSidebar"] .stButton button {
+            background: #4159c7; border-color: #7187ee; color: #ffffff;
+        }
         .hero {
             background: radial-gradient(circle at 85% 20%, #5f7cff 0, transparent 30%),
                         linear-gradient(120deg, #121c38 0%, #253b82 100%);
@@ -140,7 +153,7 @@ def show_index_warnings(stats) -> None:
         )
 
 
-def rebuild_index(builder: IndexBuilder) -> bool:
+def rebuild_index(builder: IndexBuilder, rebuild: bool = False) -> bool:
     """Rebuild the index while presenting meaningful progress to the user."""
     progress_bar = st.progress(0, text="Preparing your knowledge workspace")
     status = st.empty()
@@ -150,7 +163,7 @@ def rebuild_index(builder: IndexBuilder) -> bool:
         status.caption(f"{percentage}% · {message}")
 
     try:
-        stats = builder.build(rebuild=True, progress_callback=update_progress)
+        stats = builder.build(rebuild=rebuild, progress_callback=update_progress)
         st.session_state.index_stats = builder.get_stats()
         st.session_state.index_ready = True
         if has_api_key():
@@ -224,6 +237,7 @@ def build_assistant_message(result: dict) -> dict:
         "confidence": result.get("confidence", 0),
         "sources": result.get("sources", []),
         "related_articles": result.get("related_articles", []),
+        "related_documents": result.get("related_documents", []),
         "suggested_next_steps": result.get("suggested_next_steps", []),
         "retrieved_chunks": result.get("retrieved_chunks", []),
         "low_confidence": result.get("low_confidence", False),
@@ -236,6 +250,7 @@ def render_knowledge_navigator(message: dict, message_index: int) -> None:
     confidence = int(message.get("confidence", 0))
     sources = message.get("sources", [])
     related_articles = message.get("related_articles", [])
+    related_documents = message.get("related_documents", [])
     next_steps = message.get("suggested_next_steps", [])
 
     confidence_label = confidence_class(confidence)
@@ -258,7 +273,7 @@ def render_knowledge_navigator(message: dict, message_index: int) -> None:
         unsafe_allow_html=True,
     )
 
-    if related_articles or next_steps:
+    if related_articles or related_documents or next_steps:
         left, right = st.columns(2)
         with left:
             if related_articles:
@@ -271,6 +286,10 @@ def render_knowledge_navigator(message: dict, message_index: int) -> None:
                     ):
                         st.session_state.pending_follow_up = topic
                         st.rerun()
+            if related_documents:
+                st.markdown("**Related Documents**")
+                for document in related_documents:
+                    st.caption(f"Document: {document}")
         with right:
             if next_steps:
                 st.markdown("**Suggested Next Steps**")
@@ -280,7 +299,7 @@ def render_knowledge_navigator(message: dict, message_index: int) -> None:
     render_source_snippets(message.get("retrieved_chunks", []))
 
 
-def answer_question(query: str, top_k: int) -> None:
+def answer_question(query: str, top_k: int, audience: str, filters: dict) -> None:
     """Run a query through the RAG pipeline and append the assistant response."""
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user", avatar="👤"):
@@ -289,7 +308,10 @@ def answer_question(query: str, top_k: int) -> None:
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Navigating your knowledge base…"):
             try:
-                result = st.session_state.rag_pipeline.answer(query, top_k=top_k)
+                result = st.session_state.rag_pipeline.answer(
+                    query, top_k=top_k, audience=audience, filters=filters,
+                    conversation_history=st.session_state.messages,
+                )
                 if result.get("low_confidence"):
                     st.warning(
                         "No strong match was found in your documents. "
@@ -326,6 +348,14 @@ def render_source_snippets(chunks: list[dict]) -> None:
             f'<div class="source-text">{excerpt}</div></div>',
             unsafe_allow_html=True,
         )
+        with st.expander(f"Metadata for {filename}"):
+            st.json({
+                "Title": metadata.get("title"), "Product": metadata.get("product"),
+                "Version": metadata.get("version"), "Document Type": metadata.get("document_type"),
+                "Audience": metadata.get("audience"), "Department": metadata.get("department"),
+                "Last Updated": metadata.get("last_updated"), "Keywords": metadata.get("keywords"),
+                "Summary": metadata.get("summary"),
+            })
     if len(chunks) > 3:
         with st.expander(f"View {len(chunks) - 3} more source excerpt(s)"):
             for chunk in chunks[3:]:
@@ -364,6 +394,18 @@ with st.sidebar:
     st.markdown('<div class="metric-card"><div class="metric-label">Documents indexed</div><div class="metric-value">{}</div></div>'.format(stats.get("document_count", 0)), unsafe_allow_html=True)
     st.markdown('<div class="metric-card"><div class="metric-label">Searchable chunks</div><div class="metric-value">{}</div></div>'.format(stats.get("total_chunks", 0)), unsafe_allow_html=True)
     indexed_files = stats.get("filenames", [])
+    st.markdown("### Search context")
+    audience = st.selectbox("Answer for", ["End User", "Support Engineer", "Technical Writer", "Administrator", "Product Manager"])
+    filter_product = st.selectbox("Product", ["All"] + stats.get("products", []))
+    filter_version = st.selectbox("Version", ["All", "Latest Version"] + stats.get("versions", []))
+    filter_type = st.selectbox("Document Type", ["All"] + stats.get("document_types", []))
+    filter_department = st.text_input("Department", placeholder="All")
+    filter_audience = st.selectbox("Source audience", ["All", "End User", "Support Engineer", "Technical Writer", "Administrator", "Product Manager"])
+    filters = {"product": filter_product, "version": filter_version, "document_type": filter_type, "department": filter_department or "All", "audience": filter_audience}
+    active_filter_labels = [f"{key.replace('_', ' ').title()}: {value}" for key, value in filters.items() if value != "All"]
+    st.caption("Answer style: " + audience)
+    if active_filter_labels:
+        st.info("Retrieval filters active: " + " · ".join(active_filter_labels))
     if indexed_files:
         with st.expander(f"Indexed files ({len(indexed_files)})"):
             for name in indexed_files:
@@ -371,7 +413,22 @@ with st.sidebar:
     st.divider()
     top_k = st.slider("Sources per answer", 1, 10, TOP_K, help="Controls how many document passages are considered for each answer.")
     if st.button("↻ Rebuild knowledge index", use_container_width=True):
-        rebuild_index(builder)
+        rebuild_index(builder, rebuild=True)
+    if indexed_files:
+        with st.expander("Repository management"):
+            delete_filename = st.selectbox("Delete indexed document", indexed_files)
+            if st.button("Delete document", use_container_width=True):
+                builder.delete_document(delete_filename)
+                st.session_state.index_stats = builder.get_stats()
+                st.rerun()
+            if st.button("Clear index (keep uploads)", use_container_width=True):
+                builder.clear_repository(delete_sources=False)
+                load_existing_pipeline(builder)
+                st.rerun()
+            if st.button("Delete repository and uploads", type="secondary", use_container_width=True):
+                builder.clear_repository(delete_sources=True)
+                load_existing_pipeline(builder)
+                st.rerun()
     if st.button("Clear session", use_container_width=True, type="secondary"):
         clear_session()
     st.caption("Clearing a session keeps your indexed documents intact.")
@@ -401,13 +458,38 @@ with summary_col:
 
 if uploaded_files and st.button("Index uploaded documents", type="primary"):
     saved = save_uploaded_files(uploaded_files)
-    if saved and rebuild_index(builder):
+    duplicates = []
+    for filename in saved:
+        duplicates.extend(builder.find_duplicates(filename, DUPLICATE_THRESHOLD))
+    if duplicates:
+        best = max(duplicates, key=lambda item: item["similarity"])
+        st.warning(f"Duplicate Document Detected — {best['similarity']:.0%} similar to {best['metadata']['filename']}. Duplicated section: {snippet(best['text'], 180)}")
+    if saved and rebuild_index(builder, rebuild=False):
         st.success(f"Added {len(saved)} document(s): {', '.join(saved)}")
         st.rerun()
     if not saved:
         st.warning("No supported files were selected.")
 
 st.divider()
+
+if indexed_files:
+    with st.expander("Document comparison and knowledge cards"):
+        left_document = st.selectbox("First document", indexed_files, key="compare_left")
+        right_options = [name for name in indexed_files if name != left_document] or indexed_files
+        right_document = st.selectbox("Second document", right_options, key="compare_right")
+        if st.button("Compare selected documents"):
+            comparison = builder.compare_documents(left_document, right_document)
+            st.metric("Content similarity", f"{comparison['similarity']}%")
+            for label, items in (("Additions", comparison["additions"]), ("Removed sections", comparison["removed_sections"]), ("Changed procedures", comparison["changed_procedures"])):
+                st.markdown(f"**{label}**")
+                st.write("\n".join(f"- {item}" for item in items) or "None")
+        st.markdown("#### Knowledge cards")
+        for document in stats.get("documents", []):
+            with st.container(border=True):
+                st.markdown(f"**{document.get('title')}** · v{document.get('version')}")
+                st.caption(f"{document.get('document_type')} | {document.get('audience')} | {document.get('department')}")
+                st.write(document.get("summary", ""))
+                st.caption(f"Topics: {document.get('keywords', 'Not available')} · Quality score: {85 if document.get('summary') else 55}/100")
 
 if not st.session_state.index_ready:
     st.markdown(
@@ -440,7 +522,7 @@ else:
         if st.session_state.rag_pipeline is None:
             st.session_state.rag_pipeline = builder.create_rag_pipeline()
         if st.session_state.rag_pipeline:
-            answer_question(pending_follow_up, top_k=top_k)
+            answer_question(pending_follow_up, top_k=top_k, audience=audience, filters=filters)
 
     query = st.chat_input("Ask a question about your documentation")
     if query:
@@ -450,4 +532,4 @@ else:
             st.session_state.rag_pipeline = builder.create_rag_pipeline()
 
         if has_api_key() and st.session_state.rag_pipeline:
-            answer_question(query, top_k=top_k)
+            answer_question(query, top_k=top_k, audience=audience, filters=filters)

@@ -10,6 +10,7 @@ from typing import Dict, List
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.config import CHUNK_OVERLAP, CHUNK_SIZE
+from src.metadata import extract_metadata
 
 
 class DocumentChunker:
@@ -48,9 +49,14 @@ class DocumentChunker:
             List of chunk dicts with chunk text and metadata
         """
         text = document["text"]
-        metadata = document["metadata"]
+        metadata = document["metadata"].copy()
+        # Keep chunking safe when called outside IndexBuilder: every chunk must
+        # carry the same enterprise metadata used by retrieval and the UI.
+        required_fields = {"title", "product", "version", "document_type", "audience", "department", "last_updated", "keywords", "summary"}
+        if not required_fields.issubset(metadata):
+            metadata.update(extract_metadata({**document, "metadata": metadata}))
         filename = metadata["filename"]
-        document_type = metadata.get("type", "unknown")
+        document_type = metadata.get("document_type", metadata.get("type", "unknown"))
 
         chunk_texts = self.splitter.split_text(text)
         total_chunks = len(chunk_texts)
