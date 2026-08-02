@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import html
 import logging
 import os
@@ -203,15 +203,24 @@ def has_api_key() -> bool:
 
 
 def show_index_warnings(stats) -> None:
-    if stats.get('failed_files'):
+    failed_files = None
+    empty_files = None
+    if hasattr(stats, 'get'):
+        failed_files = stats.get('failed_files')
+        empty_files = stats.get('empty_files')
+    else:
+        failed_files = getattr(stats, 'failed_files', None)
+        empty_files = getattr(stats, 'empty_files', None)
+
+    if failed_files:
         st.warning(
             'Some files could not be indexed:\n\n'
-            + '\n'.join(f'- {name}' for name in stats['failed_files'])
+            + '\n'.join(f'- {name}' for name in failed_files)
         )
-    if stats.get('empty_files'):
+    if empty_files:
         st.warning(
             'These files had no extractable text (they may be scanned/image-only):\n\n'
-            + '\n'.join(f'- {name}' for name in stats['empty_files'])
+            + '\n'.join(f'- {name}' for name in empty_files)
         )
 
 
@@ -365,7 +374,7 @@ def render_knowledge_navigator(message: dict, message_index: int) -> None:
         left, right = st.columns(2)
         with left:
             if related_articles:
-                st.markdown('**Related Articles**')
+                st.markdown('**Search more**')
                 for idx, topic in enumerate(related_articles):
                     if st.button(topic, key=f'related_{message_index}_{idx}_{topic}', use_container_width=True):
                         st.session_state.pending_follow_up = topic
@@ -527,37 +536,12 @@ with st.sidebar:
     if st.button('Open source library', key='open_library', use_container_width=True):
         st.session_state.show_library = True
         st.rerun()
-    st.markdown('### Search context')
+    st.markdown('### Search settings')
     audience = st.selectbox('Answer for', [
-                            'End User', 'Support Engineer', 'Technical Writer', 'Administrator', 'Product Manager'])
-    filter_product = st.selectbox(
-        'Product', ['All'] + stats.get('products', []))
-    filter_version = st.selectbox(
-        'Version', ['All', 'Latest Version'] + stats.get('versions', []))
-    filter_type = st.selectbox(
-        'Document Type', ['All'] + stats.get('document_types', []))
-    filter_department = st.selectbox(
-        'Department', ['All'] + stats.get('departments', []))
-    filter_audience = st.selectbox(
-        'Audience', ['All'] + stats.get('audiences', []))
-    filter_lifecycle = st.selectbox(
-        'Lifecycle status', ['All'] + stats.get('lifecycle_statuses', []))
-    filters = {
-        'product': filter_product,
-        'version': filter_version,
-        'document_type': filter_type,
-        'department': filter_department,
-        'audience': filter_audience,
-        'lifecycle_status': filter_lifecycle,
-    }
-    active_filter_labels = [
-        f'{key.replace('_', ' ').title()}: {value}'
-        for key, value in filters.items() if value != 'All'
-    ]
+        'End User', 'Support Engineer', 'Technical Writer', 'Administrator', 'Product Manager'
+    ])
+    filters = {}
     st.caption('Answer style: ' + audience)
-    if active_filter_labels:
-        st.info('Retrieval filters active: ' +
-                ' · '.join(active_filter_labels))
     if indexed_files:
         with st.expander(f'Indexed files ({len(indexed_files)})'):
             for name in indexed_files:
@@ -592,7 +576,7 @@ st.markdown(
     <section class="hero">
       <div class="eyebrow">AI KNOWLEDGE NAVIGATOR</div>
       <h1>Your documentation, intelligently guided.</h1>
-      <p>Ask a question and get a grounded answer with sources, related articles, and suggested next steps — not just a chat reply.</p>
+      <p>Ask a question and get a grounded answer with sources and suggested next steps — not just a chat reply.</p>
     </section>
     ''',
     unsafe_allow_html=True,

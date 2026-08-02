@@ -36,6 +36,9 @@ class IndexStats:
     failed_files: List[str] = field(default_factory=list)
     empty_files: List[str] = field(default_factory=list)
 
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
 
 class IndexBuilder:
     """Builds and rebuilds the document vector index."""
