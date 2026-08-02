@@ -8,6 +8,7 @@ A production-quality RAG (Retrieval-Augmented Generation) proof of concept for t
 - Local embeddings with `BAAI/bge-small-en-v1.5`
 - Persistent vector search with ChromaDB
 - Grounded answers via an LLM provider (Groq by default)
+- Streamlit source library with closeable document browsing and lifecycle badges
 - Enterprise metadata extraction (product, version, document type, audience, department, keywords, and summary)
 - Metadata-aware retrieval, audience-adapted answers, confidence scoring, and related-document recommendations
 - Incremental indexing, duplicate warnings, knowledge cards, document comparison, and live repository management

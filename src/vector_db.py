@@ -35,7 +35,8 @@ class VectorStore:
 
         self.vectorstore_path.mkdir(parents=True, exist_ok=True)
 
-        self.client = chromadb.PersistentClient(path=str(self.vectorstore_path))
+        self.client = chromadb.PersistentClient(
+            path=str(self.vectorstore_path))
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -79,7 +80,10 @@ class VectorStore:
                 "title": metadata.get("title", metadata["filename"]),
                 "product": metadata.get("product", "General"), "version": metadata.get("version", "Unspecified"),
                 "audience": metadata.get("audience", "End User"), "department": metadata.get("department", "Documentation"),
+                "author": metadata.get("author", "Unknown"),
                 "last_updated": metadata.get("last_updated", ""),
+                "publication_date": metadata.get("publication_date", ""),
+                "lifecycle_status": metadata.get("lifecycle_status", "Fresh"),
                 "keywords": ", ".join(metadata.get("keywords", [])),
                 "summary": metadata.get("summary", ""),
             })
@@ -108,7 +112,8 @@ class VectorStore:
         count = self.collection.count()
         if not count:
             return []
-        results = self.collection.query(query_embeddings=[query_embedding], n_results=min(top_k, count), where=where)
+        results = self.collection.query(
+            query_embeddings=[query_embedding], n_results=min(top_k, count), where=where)
 
         retrieved: List[Dict] = []
         if results and results["ids"] and results["ids"][0]:
@@ -159,12 +164,17 @@ class VectorStore:
             "products": sorted({meta.get("product", "General") for meta in document_metadata.values()}),
             "versions": sorted({meta.get("version", "Unspecified") for meta in document_metadata.values()}),
             "document_types": sorted({meta.get("document_type", "Unknown") for meta in document_metadata.values()}),
+            "departments": sorted({meta.get("department", "Documentation") for meta in document_metadata.values()}),
+            "audiences": sorted({meta.get("audience", "End User") for meta in document_metadata.values()}),
+            "lifecycle_statuses": sorted({meta.get("lifecycle_status", "Fresh") for meta in document_metadata.values()}),
         }
 
     def document_chunks(self, filename: str) -> List[Dict]:
         """Return all chunks belonging to one indexed document in document order."""
-        data = self.collection.get(where={"filename": filename}, include=["documents", "metadatas"])
-        chunks = [{"id": item_id, "text": text, "metadata": meta} for item_id, text, meta in zip(data["ids"], data["documents"], data["metadatas"])]
+        data = self.collection.get(where={"filename": filename}, include=[
+                                   "documents", "metadatas"])
+        chunks = [{"id": item_id, "text": text, "metadata": meta} for item_id,
+                  text, meta in zip(data["ids"], data["documents"], data["metadatas"])]
         return sorted(chunks, key=lambda item: item["metadata"].get("chunk_index", 0))
 
     def delete_document(self, filename: str) -> int:

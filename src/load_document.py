@@ -15,6 +15,12 @@ from src.config import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
+LOADER_MAPPING = {
+    ".pdf": load_pdf,
+    ".docx": load_docx,
+    # future: add ".md": load_markdown
+}
+
 
 @dataclass
 class LoadResult:
@@ -48,13 +54,13 @@ def load_document(file_path: str) -> Dict:
 
     suffix = file_path_obj.suffix.lower()
 
-    if suffix == ".pdf":
-        return load_pdf(str(file_path_obj))
-    if suffix == ".docx":
-        return load_docx(str(file_path_obj))
+    loader = LOADER_MAPPING.get(suffix)
+    if loader:
+        return loader(str(file_path_obj))
 
+    supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
     raise ValueError(
-        f"Unsupported file type: {suffix}. Supported types: .pdf, .docx"
+        f"Unsupported file type: {suffix}. Supported types: {supported}"
     )
 
 

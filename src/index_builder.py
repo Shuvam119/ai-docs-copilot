@@ -21,7 +21,7 @@ from src.config import (
 from src.embedder import EmbeddingsGenerator
 from src.load_document import load_documents_from_directory
 from src.vector_db import VectorStore
-from src.metadata import extract_metadata
+from src.metadata import extract_metadata, parse_version_tuple
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,8 @@ class IndexBuilder:
     def embedder(self) -> EmbeddingsGenerator:
         """Lazy-load the embedding model."""
         if self._embedder is None:
-            self._embedder = EmbeddingsGenerator(model_name=self.embedding_model)
+            self._embedder = EmbeddingsGenerator(
+                model_name=self.embedding_model)
         return self._embedder
 
     @property
@@ -125,6 +126,33 @@ class IndexBuilder:
         report_progress(20, "Extracting enterprise metadata")
         for document in documents:
             document["metadata"].update(extract_metadata(document))
+
+        # Apply version-aware lifecycle rules for v1 documents.
+        documents_by_title: dict[str, list[dict]] = {}
+        for document in documents:
+            title = document["metadata"].get("title", "")
+            documents_by_title.setdefault(title, []).append(document)
+
+        for doc_list in documents_by_title.values():
+            versioned_items = [
+                (item, parse_version_tuple(
+                    item["metadata"].get("version", "")))
+                for item in doc_list
+            ]
+            valid_versions = [version for _,
+                              version in versioned_items if version is not None]
+            latest_version = max(valid_versions) if valid_versions else None
+
+            for item, version_tuple in versioned_items:
+                if version_tuple in {(1,), (1, 0)}:
+                    if latest_version and latest_version > version_tuple:
+                        if latest_version[0] > 1:
+                            item["metadata"]["lifecycle_status"] = "Stale"
+                        else:
+                            item["metadata"]["lifecycle_status"] = "Aging"
+                    else:
+                        item["metadata"]["lifecycle_status"] = "Fresh"
+
         filenames = [doc["metadata"]["filename"] for doc in documents]
         logger.info("Loaded %d document(s)", len(documents))
 
@@ -134,7 +162,8 @@ class IndexBuilder:
         else:
             existing_stats = self.vector_store.get_stats()
             existing_filenames = set(existing_stats["filenames"])
-            required_fields = {"title", "product", "version", "document_type", "audience", "department", "keywords", "summary"}
+            required_fields = {"title", "product", "version", "document_type",
+                               "audience", "department", "keywords", "summary"}
             legacy_documents = {
                 item["filename"] for item in existing_stats.get("documents", [])
                 if not required_fields.issubset(item)
@@ -173,6 +202,19 @@ class IndexBuilder:
         """Return current vector store statistics."""
         return self.vector_store.get_stats()
 
+    def remove_orphaned_documents(self) -> list[str]:
+        """Purge indexed documents whose source files no longer exist."""
+        raw_files = {
+            source.name for source in Path(self.raw_data_dir).iterdir()
+            if source.suffix.lower() in {".pdf", ".docx"}
+        }
+        stats = self.vector_store.get_stats()
+        orphaned = [filename for filename in stats.get(
+            "filenames", []) if filename not in raw_files]
+        for filename in orphaned:
+            self.vector_store.delete_document(filename)
+        return orphaned
+
     def delete_document(self, filename: str, delete_source: bool = True) -> int:
         """Remove an indexed document and, optionally, its uploaded source file."""
         removed = self.vector_store.delete_document(filename)
@@ -193,14 +235,20 @@ class IndexBuilder:
     def compare_documents(self, left: str, right: str) -> Dict:
         """Compare indexed document content using chunk-level sequence matching."""
         from difflib import SequenceMatcher
-        left_chunks, right_chunks = self.vector_store.document_chunks(left), self.vector_store.document_chunks(right)
-        left_text, right_text = "\n".join(c["text"] for c in left_chunks), "\n".join(c["text"] for c in right_chunks)
-        matcher = SequenceMatcher(None, left_text.splitlines(), right_text.splitlines())
+        left_chunks, right_chunks = self.vector_store.document_chunks(
+            left), self.vector_store.document_chunks(right)
+        left_text, right_text = "\n".join(c["text"] for c in left_chunks), "\n".join(
+            c["text"] for c in right_chunks)
+        matcher = SequenceMatcher(
+            None, left_text.splitlines(), right_text.splitlines())
         additions, removals, changes = [], [], []
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == "insert": additions.extend(right_text.splitlines()[j1:j2][:5])
-            elif tag == "delete": removals.extend(left_text.splitlines()[i1:i2][:5])
-            elif tag == "replace": changes.append(" ".join(right_text.splitlines()[j1:j2])[:300])
+            if tag == "insert":
+                additions.extend(right_text.splitlines()[j1:j2][:5])
+            elif tag == "delete":
+                removals.extend(left_text.splitlines()[i1:i2][:5])
+            elif tag == "replace":
+                changes.append(" ".join(right_text.splitlines()[j1:j2])[:300])
         return {"similarity": round(matcher.ratio() * 100), "additions": additions[:10], "removed_sections": removals[:10], "changed_procedures": changes[:10]}
 
     def find_duplicates(self, filename: str, threshold: float) -> List[Dict]:
@@ -209,10 +257,12 @@ class IndexBuilder:
         if not source.exists() or not self.vector_store.get_stats()["total_chunks"]:
             return []
         document = load_documents_from_directory(self.raw_data_dir).documents
-        candidate = next((item for item in document if item["metadata"]["filename"] == filename), None)
+        candidate = next(
+            (item for item in document if item["metadata"]["filename"] == filename), None)
         if not candidate:
             return []
-        vector = self.embedder.embed_text(candidate["text"][:4000], is_query=True).tolist()
+        vector = self.embedder.embed_text(
+            candidate["text"][:4000], is_query=True).tolist()
         matches = self.vector_store.search(vector, top_k=5)
         return [match for match in matches if match["metadata"]["filename"] != filename and match["similarity"] >= threshold]
 
