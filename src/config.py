@@ -16,6 +16,9 @@ VECTORSTORE_DIR = PROJECT_ROOT / "vectorstore" / "chroma_db"
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 TOP_K = int(os.getenv("TOP_K", "5"))
+SEARCH_CANDIDATE_MULTIPLIER = int(
+    os.getenv("SEARCH_CANDIDATE_MULTIPLIER", "3"))
+SEARCH_MIN_CANDIDATES = int(os.getenv("SEARCH_MIN_CANDIDATES", "12"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 COLLECTION_NAME = "documents"
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")

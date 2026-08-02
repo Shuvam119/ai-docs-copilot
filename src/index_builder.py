@@ -254,12 +254,18 @@ class IndexBuilder:
                 changes.append(" ".join(right_text.splitlines()[j1:j2])[:300])
         return {"similarity": round(matcher.ratio() * 100), "additions": additions[:10], "removed_sections": removals[:10], "changed_procedures": changes[:10]}
 
-    def find_duplicates(self, filename: str, threshold: float) -> List[Dict]:
+    def find_duplicates(
+        self,
+        filename: str,
+        threshold: float,
+        document_list: Optional[List[Dict]] = None,
+    ) -> List[Dict]:
         """Find semantic near-duplicates for a newly indexed/uploaded document."""
         source = Path(self.raw_data_dir) / filename
         if not source.exists() or not self.vector_store.get_stats()["total_chunks"]:
             return []
-        document = load_documents_from_directory(self.raw_data_dir).documents
+        document = document_list or load_documents_from_directory(
+            self.raw_data_dir).documents
         candidate = next(
             (item for item in document if item["metadata"]["filename"] == filename), None)
         if not candidate:

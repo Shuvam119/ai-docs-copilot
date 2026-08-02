@@ -259,25 +259,34 @@ def rebuild_index(builder: IndexBuilder, rebuild: bool = False) -> bool:
 
 
 def load_existing_pipeline(builder: IndexBuilder) -> None:
+    if 'pipeline_loaded' in st.session_state:
+        return
+
     orphaned = builder.remove_orphaned_documents()
     if orphaned:
         logger.info('Removed orphaned documents: %s', ', '.join(orphaned))
+
     stats = builder.get_stats()
     st.session_state.index_stats = stats
-    if not stats.get('total_chunks'):
-        st.session_state.rag_pipeline = None
-        st.session_state.index_ready = False
-        return
+    st.session_state.index_ready = bool(stats.get('total_chunks'))
 
-    st.session_state.index_ready = True
-    if not has_api_key():
+    if not st.session_state.index_ready or not has_api_key():
         st.session_state.rag_pipeline = None
         return
 
+    ensure_rag_pipeline(builder)
+
+
+def ensure_rag_pipeline(builder: IndexBuilder) -> None:
+    if st.session_state.get('rag_pipeline') is not None:
+        return
+    if not st.session_state.index_ready or not has_api_key():
+        st.session_state.rag_pipeline = None
+        return
     try:
         st.session_state.rag_pipeline = builder.create_rag_pipeline()
-    except ValueError as exc:
-        logger.warning('Could not load pipeline: %s', exc)
+    except Exception as exc:
+        logger.warning('Could not initialize RAG pipeline: %s', exc)
         st.session_state.rag_pipeline = None
 
 
@@ -512,6 +521,8 @@ for key, value in {
     'index_ready': False,
     'index_stats': {'document_count': 0, 'total_chunks': 0, 'filenames': []},
     'show_library': False,
+    'audience': 'End User',
+    'top_k': TOP_K,
 }.items():
     st.session_state.setdefault(key, value)
 
@@ -537,18 +548,23 @@ with st.sidebar:
         st.session_state.show_library = True
         st.rerun()
     st.markdown('### Search settings')
-    audience = st.selectbox('Answer for', [
-        'End User', 'Support Engineer', 'Technical Writer', 'Administrator', 'Product Manager'
-    ])
+    audience = st.selectbox(
+        'Answer for', [
+            'End User', 'Support Engineer', 'Technical Writer',
+            'Administrator', 'Product Manager'
+        ], index=['End User', 'Support Engineer', 'Technical Writer', 'Administrator', 'Product Manager'].index(st.session_state.audience), key='audience'
+    )
+    top_k = st.slider(
+        'Sources per answer', 1, 10, st.session_state.top_k,
+        key='top_k', help='Controls how many document passages are considered for each answer.'
+    )
     filters = {}
-    st.caption('Answer style: ' + audience)
+    st.caption('Answer style: ' + st.session_state.audience)
     if indexed_files:
         with st.expander(f'Indexed files ({len(indexed_files)})'):
             for name in indexed_files:
                 st.caption(f'📄 {name}')
     st.divider()
-    top_k = st.slider('Sources per answer', 1, 10, TOP_K,
-                      help='Controls how many document passages are considered for each answer.')
     if st.button('↻ Rebuild knowledge index', use_container_width=True):
         rebuild_index(builder, rebuild=True)
     if indexed_files:
@@ -597,9 +613,13 @@ with summary_col:
 if uploaded_files and st.button('Index uploaded documents', type='primary'):
     saved = save_uploaded_files(uploaded_files)
     duplicates = []
-    for filename in saved:
-        duplicates.extend(builder.find_duplicates(
-            filename, DUPLICATE_THRESHOLD))
+    if saved:
+        from src.load_document import load_documents_from_directory
+        document_collection = load_documents_from_directory(
+            RAW_DATA_DIR).documents
+        for filename in saved:
+            duplicates.extend(builder.find_duplicates(
+                filename, DUPLICATE_THRESHOLD, document_list=document_collection))
     if duplicates:
         best = max(duplicates, key=lambda item: item['similarity'])
         st.warning(
@@ -656,19 +676,26 @@ else:
 
     pending_follow_up = st.session_state.pop('pending_follow_up', None)
     if pending_follow_up and has_api_key():
-        if st.session_state.rag_pipeline is None:
-            st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        ensure_rag_pipeline(builder)
         if st.session_state.rag_pipeline:
-            answer_question(pending_follow_up, top_k=top_k,
-                            audience=audience, filters=filters)
+            answer_question(
+                pending_follow_up,
+                top_k=st.session_state.top_k,
+                audience=st.session_state.audience,
+                filters=filters,
+            )
 
     query = st.chat_input('Ask a question about your documentation')
     if query:
         if not has_api_key():
             st.error('Add GROQ_API_KEY to `.env` before asking questions.')
-        elif st.session_state.rag_pipeline is None:
-            st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        else:
+            ensure_rag_pipeline(builder)
 
         if has_api_key() and st.session_state.rag_pipeline:
-            answer_question(query, top_k=top_k,
-                            audience=audience, filters=filters)
+            answer_question(
+                query,
+                top_k=st.session_state.top_k,
+                audience=st.session_state.audience,
+                filters=filters,
+            )
