@@ -30,12 +30,13 @@ class ContextBuilder:
             "Product Manager": "Focus on product impact, versions, and decisions.",
         }.get(audience, "Adapt to the selected audience.")
         recent_history = "\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in history[-6:]) or "None"
+        retrieved_evidence = "\n\n---\n\n".join(evidence)
         return {
             "system_prompt": f"{NAVIGATOR_PROMPT}\n\nSelected audience: {audience}. {audience_guidance}",
             "user_prompt": (
                 "ENTERPRISE CONTEXT\n"
                 f"Conversation history:\n{recent_history}\n\n"
-                f"Retrieved evidence:\n{'\n\n---\n\n'.join(evidence)}\n\n"
+                f"Retrieved evidence:\n{retrieved_evidence}\n\n"
                 f"Related documents: {', '.join(retrieval.get('related_documents', [])) or 'None'}\n"
                 f"Question: {question}"
             ),
