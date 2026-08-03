@@ -2,6 +2,7 @@
 import html
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -112,63 +113,72 @@ st.markdown(
             font-weight: 700; margin-left: .5rem;
         }
         .lifecycle-fresh { background: #ecfdf5; color: #064e3b; }
+        .lifecycle-need-update { background: #ffedd5; color: #9a3412; }
+        .lifecycle-needs-deprecation { background: #fee2e2; color: #991b1b; }
         .lifecycle-aging { background: #fef3c7; color: #78350f; }
         .lifecycle-stale { background: #fee2e2; color: #991b1b; }
         .lifecycle-archived { background: #f8fafc; color: #475569; }
         .lifecycle-needs-review { background: #e0e7ff; color: #3730a3; }
-        .source-library-card {
-            background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 18px;
-            padding: 1rem 1.1rem; margin-bottom: 1rem;
-            transition: transform 0.18s ease, box-shadow 0.18s ease;
-        }
-        .source-library-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 18px 35px rgba(15, 23, 42, 0.08);
-        }
-        .source-library-heading { color: #0f172a; font-size: 1rem; font-weight: 800; margin-bottom: .35rem; }
         .source-library-meta { color: #475467; font-size: .92rem; margin-top: .3rem; }
-        .source-library-title { font-size: 1.15rem; font-weight: 900; letter-spacing: -0.02em; margin: 0; }
-        .source-library-subtitle { color: #64748b; font-size: .95rem; margin-top: .25rem; }
-        .modal-backdrop {
-            position: fixed; inset: 0; z-index: 998;
-            background: rgba(15, 23, 42, 0.42);
-            backdrop-filter: blur(6px);
+        [data-testid="stDialog"] > div {
+            border-radius: 22px;
+            border: 1px solid rgba(15, 23, 42, 0.06);
+            box-shadow: 0 28px 70px rgba(15, 23, 42, 0.25), 0 2px 10px rgba(15, 23, 42, 0.08);
         }
-        .floating-library {
-            margin: 0 auto;
-            width: min(760px, calc(100vw - 48px));
-            max-height: calc(88vh);
+        [data-testid="stDialog"] [slot="title"] {
+            border-bottom: 1px solid #eef1f6;
+            color: #0f172a;
+            font-size: 1.2rem;
+            padding: 1.4rem 1.5rem 1rem;
+        }
+        [data-testid="stDialog"] [slot="title"] + div {
+            background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+            max-height: min(64vh, 680px);
             overflow-y: auto;
-            background: #ffffff;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            border-radius: 26px;
-            box-shadow: 0 40px 90px rgba(15, 23, 42, 0.18);
-            padding: 1.6rem 1.6rem 1.8rem;
-            position: relative;
-            z-index: 999;
+            padding: 1.25rem 1.5rem 1.5rem;
         }
-        .floating-library-header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 1rem;
-            margin-bottom: 1.4rem;
+        .library-summary { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.1rem; }
+        .library-summary-item {
+            display: inline-flex; align-items: center; gap: .4rem;
+            background: #eef2ff; color: #475467; border: 1px solid #e0e7ff;
+            border-radius: 999px; padding: .38rem .85rem;
+            font-size: .8rem; font-weight: 600;
         }
-        .floating-library-close {
-            color: #ffffff; background: #111827; border-radius: 999px;
-            width: 2.9rem; height: 2.9rem; display: inline-flex;
-            align-items: center; justify-content: center;
-            border: 1px solid rgba(255,255,255,0.17);
-            cursor: pointer;
-            transition: transform 0.15s ease, background 0.15s ease;
-            font-size: 1.05rem;
-            line-height: 1;
+        .library-summary-item strong { color: #253b82; font-size: .9rem; }
+        .library-grid-count { color: #98a2b3; font-size: .78rem; font-weight: 600; margin: .25rem 0 .6rem; }
+        .library-card {
+            background: #ffffff; border: 1px solid #e6e9f2; border-radius: 16px;
+            padding: 1rem 1.1rem 1.05rem; margin-bottom: .9rem;
+            display: flex; flex-direction: column; gap: .7rem;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
         }
-        .floating-library-close:hover {
-            background: #0f172a;
-            transform: translateY(-1px);
+        .library-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.09);
+            border-color: #c7d2fe;
         }
-        .floating-library-title { margin: 0; }
+        .library-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem; }
+        .library-card-title { color: #0f172a; font-size: .95rem; font-weight: 800; line-height: 1.4; min-width: 0; }
+        .library-tags { display: flex; flex-wrap: wrap; gap: .4rem; }
+        .library-tag {
+            display: inline-flex; align-items: center;
+            background: #f1f4ff; color: #4054c7; border: 1px solid #dbe3ff;
+            border-radius: 999px; font-size: .72rem; font-weight: 700;
+            padding: .22rem .6rem;
+        }
+        .library-tag-keyword {
+            background: #f8fafc; color: #475569; border: 1px solid #e2e8f0;
+        }
+        .library-tag-legend { color: #98a2b3; font-size: .72rem; margin: .4rem 0 .2rem; }
+        .library-meta { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem .8rem; }
+        .library-meta div { color: #64748b; font-size: .78rem; }
+        .library-meta div strong { color: #334155; font-weight: 700; }
+        .library-empty {
+            background: #ffffff; border: 1px dashed #cbd5e1; border-radius: 16px;
+            padding: 2.4rem 1.5rem; text-align: center;
+        }
+        .library-empty-title { color: #334155; font-size: .95rem; font-weight: 800; margin-bottom: .3rem; }
+        .library-empty-text { color: #64748b; font-size: .85rem; }
         .navigator-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
         @media (max-width: 768px) { .navigator-grid { grid-template-columns: 1fr; } }
     </style>
@@ -224,7 +234,7 @@ def show_index_warnings(stats) -> None:
         )
 
 
-def rebuild_index(builder: IndexBuilder, rebuild: bool = False) -> bool:
+def rebuild_index(builder: IndexBuilder, rebuild: bool = False, reindex_files: list[str] | None = None) -> bool:
     progress_bar = st.progress(0, text='Preparing your knowledge workspace')
     status = st.empty()
 
@@ -234,7 +244,7 @@ def rebuild_index(builder: IndexBuilder, rebuild: bool = False) -> bool:
 
     try:
         stats = builder.build(
-            rebuild=rebuild, progress_callback=update_progress)
+            rebuild=rebuild, progress_callback=update_progress, reindex_files=reindex_files)
         st.session_state.index_stats = builder.get_stats()
         st.session_state.index_ready = True
         if has_api_key():
@@ -308,13 +318,15 @@ def lifecycle_badge(metadata: dict) -> str:
     tone = status.lower().replace(' ', '-')
     icon = {
         'Fresh': '🟢',
+        'Need Update': '🟠',
+        'Needs Deprecation': '🔴',
         'Aging': '🟡',
         'Stale': '🔴',
         'Archived': '⚪',
         'Needs Review': '🔵',
     }.get(status, '⚪')
     return (
-        f'<span class="lifecycle-badge lifecycle-{tone}">{icon} '
+        f'<span class="lifecycle-badge lifecycle-{tone}" title="Lifecycle: {html.escape(status)}">{icon} '
         f'{html.escape(status)}</span>'
     )
 
@@ -466,53 +478,214 @@ def render_source_snippets(chunks: list[dict]) -> None:
                 st.write(snippet(chunk.get('text', ''), 600))
 
 
-def render_source_library_panel(documents: list[dict]) -> None:
-    if not documents:
-        return
+def version_key(item: dict) -> tuple[int, ...]:
+    """Numeric sort key for a document's version field."""
+    return tuple(
+        int(part) for part in str(item.get('version', '')).split('.') if part.isdigit()
+    )
 
-    cards = []
-    for document in documents:
-        title = html.escape(document.get(
-            'title', document.get('filename', 'Unknown')))
-        version = html.escape(str(document.get('version', 'Unspecified')))
-        author = html.escape(document.get('author', 'Unknown'))
-        last_updated = html.escape(str(document.get('last_updated', '')))
-        badge_html = lifecycle_badge(document)
-        cards.append(
-            f'<div class="source-library-card">'
-            f'<div class="source-library-heading">{title} {badge_html}</div>'
-            f'<div class="source-library-meta">Version {version} · Author: {author}</div>'
-            f'<div class="source-library-meta">Last published: {last_updated}</div>'
-            f'</div>'
+
+def sort_documents_by_version(documents: list[dict]) -> list[dict]:
+    return sorted(
+        documents,
+        key=lambda item: (version_key(item), str(item.get('title', '')).lower()),
+        reverse=True,
+    )
+
+
+def sort_documents(documents: list[dict], sort_by: str) -> list[dict]:
+    if sort_by == 'Title A–Z':
+        return sorted(
+            documents, key=lambda item: str(item.get('title', '')).lower())
+    if sort_by == 'Recently updated':
+        return sorted(
+            documents,
+            key=lambda item: str(item.get('last_updated', '')),
+            reverse=True,
         )
+    if sort_by == 'Version: oldest first':
+        return sorted(
+            documents,
+            key=lambda item: (version_key(item), str(item.get('title', '')).lower()),
+        )
+    return sort_documents_by_version(documents)
 
-    with st.container():
+
+def is_latest_version(document: dict, documents: list[dict]) -> bool:
+    title = str(document.get('title', ''))
+    siblings = [doc for doc in documents if str(doc.get('title', '')) == title]
+    if not siblings:
+        return True
+    latest = max(siblings, key=lambda item: version_key(item))
+    return latest.get('filename') == document.get('filename')
+
+
+def pick_keywords(keywords: str, limit: int = 2) -> list[str]:
+    """Choose a few readable keywords, skipping filename- and filler-derived terms."""
+    ignored = {
+        'docx', 'pdf', 'page', 'corporation', 'confidential', 'summary',
+        'revision', 'version', 'document', 'documents', 'purpose', 'policy',
+    }
+    picked: list[str] = []
+    for keyword in str(keywords or '').split(','):
+        token = keyword.strip()
+        if len(token) < 3 or '_' in token or ' ' in token:
+            continue
+        if token.lower() in ignored or re.search(r'v?\d', token, flags=re.I):
+            continue
+        if token not in picked:
+            picked.append(token)
+        if len(picked) == limit:
+            break
+    return picked
+
+
+def build_library_card(document: dict) -> str:
+    title = html.escape(document.get(
+        'title', document.get('filename', 'Unknown')))
+    filename = html.escape(str(document.get('filename', '')))
+    version = html.escape(str(document.get('version', 'Unspecified')))
+    author = html.escape(str(document.get('author', 'Unknown')))
+    last_updated = html.escape(str(document.get('last_updated', '')))
+    document_type = html.escape(str(document.get('document_type', '')))
+    chunks = document.get('total_chunks', 0)
+    badge_html = lifecycle_badge(document)
+
+    meta_rows = [('Version', version), ('Chunks', str(chunks))]
+    if last_updated:
+        meta_rows.append(('Updated', last_updated))
+    if author and author != 'Unknown':
+        meta_rows.append(('Author', author))
+    meta_html = ''.join(
+        f'<div><strong>{html.escape(label)}</strong>: {value}</div>'
+        for label, value in meta_rows
+    )
+
+    tags = []
+    if document_type and document_type.lower() not in {'unknown', 'nan', 'none'}:
+        tags.append(
+            f'<span class="library-tag" title="Document type">{document_type}</span>')
+    for keyword in pick_keywords(document.get('keywords', '')):
+        tags.append(
+            f'<span class="library-tag library-tag-keyword" title="Keyword">#{keyword}</span>')
+
+    return (
+        '<div class="library-card">'
+        f'<div class="library-card-top"><div class="library-card-title" title="{filename}">{title}</div>{badge_html}</div>'
+        f'<div class="library-tags">{"".join(tags)}</div>'
+        f'<div class="library-meta">{meta_html}</div>'
+        '</div>'
+    )
+
+
+@st.dialog('Source Library', width='large', icon=':material/auto_stories:')
+def render_source_library_panel(documents: list[dict]) -> None:
+    documents = sort_documents_by_version(documents)
+    total_chunks = sum(int(doc.get('total_chunks', 0) or 0) for doc in documents)
+    document_types = sorted(
+        {doc.get('document_type', 'Unknown') for doc in documents})
+    lifecycle_statuses = sorted(
+        {doc.get('lifecycle_status', 'Fresh') for doc in documents})
+
+    st.markdown(
+        f'''
+        <div class="library-summary">
+            <span class="library-summary-item"><strong>{len(documents)}</strong> document(s)</span>
+            <span class="library-summary-item"><strong>{total_chunks}</strong> searchable chunk(s)</span>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    if not documents:
         st.markdown(
-            '<div class="floating-library">'
-            '<div class="floating-library-header-row">'
-            '<div>'
-            '<div class="source-library-title">Source Library</div>'
-            '<div class="source-library-subtitle">Browse recent documents, versions, and lifecycle status in one place.</div>'
-            '</div>'
+            '<div class="library-empty">'
+            '<div class="library-empty-title">No indexed documents yet</div>'
+            '<div class="library-empty-text">Upload PDF or DOCX files and rebuild the index to populate the source library.</div>'
             '</div>',
             unsafe_allow_html=True,
         )
-        if st.button('Close source library', key='close_library', use_container_width=True, help='Close source library'):
+        if st.button('Close source library', key='close_library', use_container_width=True):
             st.session_state.show_library = False
             st.rerun()
+        return
 
-        if cards:
-            for card in cards:
-                st.markdown(card, unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div class="source-library-card">'
-                '<div class="source-library-heading">No indexed documents found</div>'
-                '<div class="source-library-meta">Upload documents or rebuild the index to populate the source library.</div>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown('</div>', unsafe_allow_html=True)
+    if st.session_state.pop('library_reset_requested', False):
+        for key in ['library_search', 'library_filter_type',
+                    'library_filter_status', 'library_sort', 'library_latest_only']:
+            st.session_state.pop(key, None)
+
+    search = st.text_input(
+        'Search',
+        placeholder='Filter by title or file name',
+        key='library_search',
+        label_visibility='collapsed',
+    ).strip().lower()
+
+    type_col, status_col = st.columns(2)
+    with type_col:
+        type_filter = st.selectbox(
+            'Document type', ['All'] + document_types, key='library_filter_type')
+    with status_col:
+        status_filter = st.selectbox(
+            'Lifecycle', ['All'] + lifecycle_statuses, key='library_filter_status')
+
+    sort_col, latest_col, reset_col = st.columns([1.6, 1.2, 1])
+    with sort_col:
+        sort_by = st.selectbox(
+            'Sort by',
+            ['Version: newest first', 'Version: oldest first',
+             'Title A–Z', 'Recently updated'],
+            key='library_sort',
+        )
+    with latest_col:
+        latest_only = st.checkbox(
+            'Only latest versions', key='library_latest_only')
+    with reset_col:
+        st.markdown('')
+        if st.button('Reset filters', key='library_reset', use_container_width=True):
+            st.session_state.library_reset_requested = True
+
+    filtered = [
+        doc for doc in documents
+        if (not search
+            or search in str(doc.get('title', '')).lower()
+            or search in str(doc.get('filename', '')).lower())
+        and (type_filter == 'All'
+             or doc.get('document_type', 'Unknown') == type_filter)
+        and (status_filter == 'All'
+             or doc.get('lifecycle_status', 'Fresh') == status_filter)
+        and (not latest_only or is_latest_version(doc, documents))
+    ]
+    filtered = sort_documents(filtered, sort_by)
+
+    if filtered:
+        st.markdown(
+            f'<div class="library-grid-count">{len(filtered)} of {len(documents)} shown</div>',
+            unsafe_allow_html=True,
+        )
+        with st.container(height=520, border=False):
+            columns = st.columns(2)
+            for index, document in enumerate(filtered):
+                with columns[index % 2]:
+                    st.markdown(build_library_card(document), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="library-tag-legend">Blue tags: document type · '
+            'grey tags: keywords · badges: lifecycle status</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="library-empty">'
+            '<div class="library-empty-title">No documents match your filter</div>'
+            '<div class="library-empty-text">Try a different keyword, or clear the search box above.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    if st.button('Close source library', key='close_library', use_container_width=True):
+        st.session_state.show_library = False
+        st.rerun()
 
 
 for key, value in {
@@ -559,6 +732,24 @@ with st.sidebar:
         key='top_k', help='Controls how many document passages are considered for each answer.'
     )
     filters = {}
+    if indexed_files:
+        with st.expander('Filter by metadata', expanded=False):
+            filter_product = st.selectbox(
+                'Product', ['All'] + stats.get('products', []), key='filter_product')
+            filter_version = st.selectbox(
+                'Version', ['All', 'Latest Version'] + stats.get('versions', []), key='filter_version')
+            filter_department = st.selectbox(
+                'Department', ['All'] + stats.get('departments', []), key='filter_department')
+            filter_doc_type = st.selectbox(
+                'Document type', ['All'] + stats.get('document_types', []), key='filter_doc_type')
+        if filter_product != 'All':
+            filters['product'] = filter_product
+        if filter_version != 'All':
+            filters['version'] = filter_version
+        if filter_department != 'All':
+            filters['department'] = filter_department
+        if filter_doc_type != 'All':
+            filters['document_type'] = filter_doc_type
     st.caption('Answer style: ' + st.session_state.audience)
     if indexed_files:
         with st.expander(f'Indexed files ({len(indexed_files)})'):
@@ -613,7 +804,10 @@ with summary_col:
 if uploaded_files and st.button('Index uploaded documents', type='primary'):
     saved = save_uploaded_files(uploaded_files)
     duplicates = []
+    reindex_files = []
     if saved:
+        existing = set(st.session_state.index_stats.get('filenames', []))
+        reindex_files = [name for name in saved if name in existing]
         from src.load_document import load_documents_from_directory
         document_collection = load_documents_from_directory(
             RAW_DATA_DIR).documents
@@ -625,7 +819,7 @@ if uploaded_files and st.button('Index uploaded documents', type='primary'):
         st.warning(
             f"Duplicate Document Detected — {best['similarity']:.0%} similar to {best['metadata']['filename']}. Duplicated section: {snippet(best['text'], 180)}"
         )
-    if saved and rebuild_index(builder, rebuild=False):
+    if saved and rebuild_index(builder, rebuild=False, reindex_files=reindex_files):
         st.success(f"Added {len(saved)} document(s): {', '.join(saved)}")
         st.rerun()
     if not saved:
@@ -633,7 +827,7 @@ if uploaded_files and st.button('Index uploaded documents', type='primary'):
 
 st.divider()
 
-# The source library is now available through the floating panel in the sidebar.
+# The source library opens as a floating modal window from the sidebar.
 
 if not st.session_state.index_ready:
     st.markdown(
@@ -647,14 +841,10 @@ if not st.session_state.index_ready:
     )
 
 if st.session_state.show_library:
-    documents = stats.get('documents', [])
-    sorted_documents = sorted(
-        documents,
-        key=lambda item: tuple(int(part) for part in str(
-            item.get('version', '')).split('.') if part.isdigit()),
-        reverse=True,
-    )
-    render_source_library_panel(sorted_documents)
+    st.session_state.show_library = False
+    fresh_stats = builder.get_stats()
+    st.session_state.index_stats = fresh_stats
+    render_source_library_panel(fresh_stats.get('documents', []))
 
 else:
     st.markdown('### AI Knowledge Navigator')

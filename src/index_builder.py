@@ -21,7 +21,7 @@ from src.config import (
 from src.embedder import EmbeddingsGenerator
 from src.load_document import load_documents_from_directory
 from src.vector_db import VectorStore
-from src.metadata import extract_metadata, parse_version_tuple
+from src.metadata import apply_version_lifecycle, extract_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ class IndexBuilder:
         self,
         rebuild: bool = False,
         progress_callback: Optional[Callable[[int, str], None]] = None,
+        reindex_files: Optional[List[str]] = None,
     ) -> IndexStats:
         """
         Build the vector index from documents in the raw data directory.
@@ -100,6 +101,8 @@ class IndexBuilder:
         Args:
             rebuild: If True, clear the existing collection before indexing
             progress_callback: Receives a percentage and status while indexing
+            reindex_files: Filenames already in the index that should be
+                re-indexed (e.g. their source files were overwritten)
 
         Returns:
             IndexStats with document and chunk counts
@@ -130,33 +133,10 @@ class IndexBuilder:
         for document in documents:
             document["metadata"].update(extract_metadata(document))
 
-        # Apply version-aware lifecycle rules for v1 documents.
-        documents_by_title: dict[str, list[dict]] = {}
-        for document in documents:
-            title = document["metadata"].get("title", "")
-            documents_by_title.setdefault(title, []).append(document)
+        # Apply version-aware lifecycle rules: latest version is Fresh,
+        # older versions become "Need Update" or "Needs Deprecation".
+        apply_version_lifecycle(documents)
 
-        for doc_list in documents_by_title.values():
-            versioned_items = [
-                (item, parse_version_tuple(
-                    item["metadata"].get("version", "")))
-                for item in doc_list
-            ]
-            valid_versions = [version for _,
-                              version in versioned_items if version is not None]
-            latest_version = max(valid_versions) if valid_versions else None
-
-            for item, version_tuple in versioned_items:
-                if version_tuple in {(1,), (1, 0)}:
-                    if latest_version and latest_version > version_tuple:
-                        if latest_version[0] > 1:
-                            item["metadata"]["lifecycle_status"] = "Stale"
-                        else:
-                            item["metadata"]["lifecycle_status"] = "Aging"
-                    else:
-                        item["metadata"]["lifecycle_status"] = "Fresh"
-
-        filenames = [doc["metadata"]["filename"] for doc in documents]
         logger.info("Loaded %d document(s)", len(documents))
 
         if rebuild:
@@ -173,17 +153,28 @@ class IndexBuilder:
             }
             for filename in legacy_documents:
                 self.vector_store.delete_document(filename)
+            reindex = set(reindex_files or [])
+            for filename in reindex & existing_filenames:
+                self.vector_store.delete_document(filename)
             documents = [
                 doc for doc in documents
                 if doc["metadata"]["filename"] not in existing_filenames
                 or doc["metadata"]["filename"] in legacy_documents
+                or doc["metadata"]["filename"] in reindex
             ]
+
+        filenames = [doc["metadata"]["filename"] for doc in documents]
+
         if not documents:
             report_progress(100, "All documents are already indexed")
-            stats = self.vector_store.get_stats()
-            return IndexStats(len(filenames), 0, filenames, load_result.failed_files, load_result.empty_files)
+            return IndexStats(0, 0, [], load_result.failed_files, load_result.empty_files)
+
         chunks = self.chunker.chunk_documents(documents)
         logger.info("Created %d chunk(s)", len(chunks))
+
+        if not chunks:
+            report_progress(100, "No searchable text could be extracted")
+            return IndexStats(0, 0, filenames, load_result.failed_files, load_result.empty_files)
 
         report_progress(40, "Creating semantic embeddings for new documents")
         chunks_with_embeddings = self.embedder.embed_chunks(chunks)
@@ -271,7 +262,7 @@ class IndexBuilder:
         if not candidate:
             return []
         vector = self.embedder.embed_text(
-            candidate["text"][:4000], is_query=True).tolist()
+            candidate["text"][:4000], is_query=False).tolist()
         matches = self.vector_store.search(vector, top_k=5)
         return [match for match in matches if match["metadata"]["filename"] != filename and match["similarity"] >= threshold]
 

@@ -78,18 +78,6 @@ class LLMClient:
 
         prompt = system_prompt or SYSTEM_PROMPT
 
-        full_prompt = f"""
-{prompt}
-
-Context:
-{context}
-
-Question:
-{query}
-
-Answer:
-"""
-
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0.2,

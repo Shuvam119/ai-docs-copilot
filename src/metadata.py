@@ -14,6 +14,50 @@ DOCUMENT_TYPES = (
     "Troubleshooting Guide",
 )
 
+DOCUMENT_TYPE_ALIASES = {
+    "standard operating procedure": "SOP",
+    "sop": "SOP",
+    "user guide": "User Guide",
+    "users guide": "User Guide",
+    "user's guide": "User Guide",
+    "administrator guide": "Administrator Guide",
+    "administrators guide": "Administrator Guide",
+    "admin guide": "Administrator Guide",
+    "job aid": "Job Aid",
+    "quick reference": "Job Aid",
+    "quick reference guide": "Job Aid",
+    "faq": "FAQ",
+    "release notes": "Release Notes",
+    "release note": "Release Notes",
+    "known issues": "Known Issues",
+    "known issue": "Known Issues",
+    "api documentation": "API Documentation",
+    "api guide": "API Documentation",
+    "api reference": "API Documentation",
+    "api reference guide": "API Documentation",
+    "training manual": "Training Manual",
+    "training guide": "Training Manual",
+    "troubleshooting guide": "Troubleshooting Guide",
+    "troubleshooting": "Troubleshooting Guide",
+}
+
+_FILENAME_TYPE_SIGNALS = (
+    ("api", "API Documentation"),
+    ("integration guide", "API Documentation"),
+    ("job aid", "Job Aid"),
+    ("quick reference", "Job Aid"),
+    ("sop", "SOP"),
+    ("faq", "FAQ"),
+    ("release notes", "Release Notes"),
+    ("known issues", "Known Issues"),
+    ("user guide", "User Guide"),
+    ("users guide", "User Guide"),
+    ("admin guide", "Administrator Guide"),
+    ("administrator", "Administrator Guide"),
+    ("training", "Training Manual"),
+    ("troubleshoot", "Troubleshooting Guide"),
+)
+
 
 def _title_from_filename(filename: str) -> str:
     """Create a readable title without a detected version suffix."""
@@ -41,7 +85,8 @@ def _keywords(text: str, limit: int = 10) -> List[str]:
 
 
 LIFECYCLE_STATUSES = (
-    "Fresh", "Aging", "Stale", "Archived", "Needs Review",
+    "Fresh", "Need Update", "Needs Deprecation", "Aging", "Stale",
+    "Archived", "Needs Review",
 )
 
 
@@ -89,6 +134,86 @@ def parse_version_tuple(version: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.group(1).split('.'))
 
 
+def _normalized_version(version: tuple[int, ...], length: int = 3) -> tuple[int, ...]:
+    """Normalize a version tuple to a fixed length so '1' == '1.0' == '1.0.0'."""
+    return version + (0,) * max(0, length - len(version))
+
+
+def apply_version_lifecycle(documents: Iterable[Dict[str, Any]]) -> None:
+    """
+    Classify lifecycle status by comparing versions within each title group.
+
+    Rules:
+      - The latest version of a title is marked "Fresh".
+      - Older versions up to one major behind the latest are marked
+        "Need Update" (a newer version exists but the document may still
+        be relevant).
+      - Older versions two or more majors behind the latest are marked
+        "Needs Deprecation" (stale or obsolete, should be retired).
+      - Documents without a parseable version are left unchanged so their
+        date-based classification is preserved.
+    """
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for document in documents:
+        title = document.get("metadata", {}).get("title", "")
+        groups.setdefault(title, []).append(document)
+
+    for group in groups.values():
+        versioned = [
+            (document, parse_version_tuple(document["metadata"].get("version", "")))
+            for document in group
+        ]
+        available = [version for _, version in versioned if version is not None]
+        if not available:
+            continue
+
+        latest = max(available, key=_normalized_version)
+        latest_normalized = _normalized_version(latest)
+
+        for document, version in versioned:
+            if version is None:
+                continue
+            normalized = _normalized_version(version)
+            if normalized == latest_normalized:
+                document["metadata"]["lifecycle_status"] = "Fresh"
+            elif latest_normalized[0] - normalized[0] >= 2:
+                document["metadata"]["lifecycle_status"] = "Needs Deprecation"
+            else:
+                document["metadata"]["lifecycle_status"] = "Need Update"
+
+
+def _normalize_document_type(value: str) -> str:
+    """Clean a raw Document Type value and map it to a canonical label."""
+    cleaned = re.sub(r"\s*\|\s*.*$", "", value).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return DOCUMENT_TYPE_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def _declared_document_type(text: str) -> str:
+    """Read the Document Type field declared in the document's metadata block."""
+    match = re.search(
+        r"(?im)^\s*document\s+type\b\s*(?:[:|\-])?\s*([^\n|]{1,80})", text)
+    return _normalize_document_type(match.group(1)) if match else ""
+
+
+def _infer_document_type(haystack: str) -> str:
+    """Best-effort type detection used when the document declares none."""
+    filename = haystack.split("\n", 1)[0].lower()
+    for signal, kind in _FILENAME_TYPE_SIGNALS:
+        if signal in filename:
+            return kind
+    lowered = haystack.lower()
+    return next((kind for kind in DOCUMENT_TYPES if kind.lower() in lowered), "User Guide")
+
+
+def _document_type_from_document(text: str, filename: str) -> str:
+    """Prefer the type declared by the document itself, else infer one."""
+    declared = _declared_document_type(text)
+    if declared:
+        return declared
+    return _infer_document_type(f"{filename}\n{text[:5000]}")
+
+
 def extract_metadata(document: Dict[str, Any]) -> Dict[str, Any]:
     """Derive a consistent enterprise metadata record from file name and content."""
     source = document["metadata"]
@@ -97,16 +222,7 @@ def extract_metadata(document: Dict[str, Any]) -> Dict[str, Any]:
     haystack = f"{filename}\n{text[:5000]}"
     lowered = haystack.lower()
 
-    document_type = next(
-        (kind for kind in DOCUMENT_TYPES if kind.lower() in lowered), "User Guide")
-    if "troubleshoot" in lowered:
-        document_type = "Troubleshooting Guide"
-    elif "release note" in lowered:
-        document_type = "Release Notes"
-    elif "known issue" in lowered:
-        document_type = "Known Issues"
-    elif "api" in lowered:
-        document_type = "API Documentation"
+    document_type = _document_type_from_document(text, filename)
 
     audience = "End User"
     if "administrator" in lowered or "admin guide" in lowered:

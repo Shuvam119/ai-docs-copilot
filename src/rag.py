@@ -56,14 +56,16 @@ class RAGPipeline:
             system_prompt=system_prompt or prompt["system_prompt"],
         )
 
+        confidence = self._confidence(retrieval)
+
         return {
             "query": query,
             "answer": llm_result["answer"],
             "sources": llm_result["sources"],
             "related_articles": llm_result["related_articles"],
             "suggested_next_steps": llm_result["suggested_next_steps"],
-            "confidence": self._confidence(retrieval),
-            "confidence_label": self._confidence_label(self._confidence(retrieval)),
+            "confidence": confidence,
+            "confidence_label": self._confidence_label(confidence),
             "retrieved_chunks": retrieval["retrieved_chunks"],
             "num_chunks": retrieval["num_chunks"],
             "low_confidence": retrieval["low_confidence"],
