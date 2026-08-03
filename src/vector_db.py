@@ -5,6 +5,7 @@ Handles ChromaDB initialization, chunk storage, and vector retrieval.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -13,6 +14,63 @@ import chromadb
 from src.config import COLLECTION_NAME, VECTORSTORE_DIR
 
 logger = logging.getLogger(__name__)
+
+# --- Process-wide ChromaDB singletons -------------------------------------
+# Creating a PersistentClient is expensive and multiple clients against the
+# same on-disk path contend for the underlying SQLite database. The client,
+# collection, and cached stats below are shared at module level so every
+# VectorStore/IndexBuilder in the process uses exactly ONE client and ONE
+# collection per (path, collection) — regardless of how many objects (Streamlit
+# sessions, RAG pipelines) are constructed.
+_client_registry: Dict[str, chromadb.ClientAPI] = {}
+_collection_registry: Dict[str, chromadb.Collection] = {}
+_stats_registry: Dict[str, Dict] = {}
+_registry_lock = threading.Lock()
+
+
+def _registry_key(vectorstore_path: str, collection_name: str) -> str:
+    return f"{Path(vectorstore_path).resolve()}::{collection_name}"
+
+
+def _get_client(vectorstore_path: str) -> chromadb.ClientAPI:
+    """Return the shared PersistentClient for a path, creating it once."""
+    path = str(Path(vectorstore_path).resolve())
+    with _registry_lock:
+        client = _client_registry.get(path)
+        if client is None:
+            client = chromadb.PersistentClient(path=path)
+            _client_registry[path] = client
+            logger.info("Created ChromaDB PersistentClient at %s", path)
+    return client
+
+
+def _get_collection(vectorstore_path: str, collection_name: str) -> chromadb.Collection:
+    """Return the shared collection for a path/name, creating it once."""
+    key = _registry_key(vectorstore_path, collection_name)
+    path = str(Path(vectorstore_path).resolve())
+    with _registry_lock:
+        collection = _collection_registry.get(key)
+        if collection is None:
+            client = _client_registry.get(path)
+            if client is None:
+                client = chromadb.PersistentClient(path=path)
+                _client_registry[path] = client
+                logger.info("Created ChromaDB PersistentClient at %s", path)
+            collection = client.get_or_create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+            _collection_registry[key] = collection
+            logger.info("Created ChromaDB collection %r at %s", collection_name, key)
+    return collection
+
+
+def _drop_cached_collection(vectorstore_path: str, collection_name: str) -> None:
+    """Drop cached collection/stats so they are recreated on next use."""
+    key = _registry_key(vectorstore_path, collection_name)
+    with _registry_lock:
+        _collection_registry.pop(key, None)
+        _stats_registry.pop(key, None)
 
 
 class VectorStore:
@@ -35,18 +93,32 @@ class VectorStore:
 
         self.vectorstore_path.mkdir(parents=True, exist_ok=True)
 
-        self.client = chromadb.PersistentClient(
-            path=str(self.vectorstore_path))
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        # Warm the shared client/collection so initialization happens exactly
+        # once per process.
+        _get_collection(str(self.vectorstore_path), collection_name)
 
         logger.info(
-            "Vector store initialized at %s (collection: %s)",
+            "Vector store ready at %s (collection: %s)",
             self.vectorstore_path,
             collection_name,
         )
+
+    @property
+    def client(self) -> chromadb.ClientAPI:
+        """The process-wide PersistentClient for this store's path."""
+        return _get_client(str(self.vectorstore_path))
+
+    @property
+    def collection(self) -> chromadb.Collection:
+        """The process-wide collection for this store's path/name."""
+        return _get_collection(str(self.vectorstore_path), self.collection_name)
+
+    def _stats_key(self) -> str:
+        return _registry_key(str(self.vectorstore_path), self.collection_name)
+
+    def _invalidate_stats(self) -> None:
+        with _registry_lock:
+            _stats_registry.pop(self._stats_key(), None)
 
     def add_chunks(self, chunks: List[Dict]) -> int:
         """
@@ -95,6 +167,7 @@ class VectorStore:
             metadatas=metadatas,
         )
 
+        self._invalidate_stats()
         logger.info("Added %d chunk(s) to vector store", len(ids))
         return len(ids)
 
@@ -136,7 +209,17 @@ class VectorStore:
         return retrieved
 
     def get_stats(self) -> Dict:
-        """Get vector store statistics."""
+        """Get vector store statistics.
+
+        Results are cached process-wide and invalidated automatically whenever
+        chunks are added, deleted, or the collection is cleared, so the same
+        full metadata scan is not repeated on every question or library open.
+        """
+        key = self._stats_key()
+        cached = _stats_registry.get(key)
+        if cached is not None:
+            return dict(cached)
+
         count = self.collection.count()
         document_count = 0
         filenames: set[str] = set()
@@ -154,7 +237,7 @@ class VectorStore:
                 if meta and meta.get("filename") not in document_metadata:
                     document_metadata[meta["filename"]] = meta
 
-        return {
+        result = {
             "collection": self.collection_name,
             "total_chunks": count,
             "document_count": document_count,
@@ -168,6 +251,8 @@ class VectorStore:
             "audiences": sorted({meta.get("audience", "End User") for meta in document_metadata.values()}),
             "lifecycle_statuses": sorted({meta.get("lifecycle_status", "Fresh") for meta in document_metadata.values()}),
         }
+        _stats_registry[key] = result
+        return dict(result)
 
     def document_chunks(self, filename: str) -> List[Dict]:
         """Return all chunks belonging to one indexed document in document order."""
@@ -183,6 +268,7 @@ class VectorStore:
         ids = existing.get("ids", [])
         if ids:
             self.collection.delete(ids=ids)
+            self._invalidate_stats()
         return len(ids)
 
     def clear_collection(self) -> None:
@@ -195,8 +281,6 @@ class VectorStore:
                 self.collection_name,
             )
 
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        _drop_cached_collection(str(self.vectorstore_path), self.collection_name)
+        _get_collection(str(self.vectorstore_path), self.collection_name)
         logger.info("Cleared collection: %s", self.collection_name)

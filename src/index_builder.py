@@ -49,6 +49,7 @@ class IndexBuilder:
         vectorstore_path: str | None = None,
         collection_name: str = COLLECTION_NAME,
         embedding_model: str = EMBEDDING_MODEL,
+        embedder: Optional[EmbeddingsGenerator] = None,
     ) -> None:
         """
         Initialize the index builder.
@@ -58,6 +59,8 @@ class IndexBuilder:
             vectorstore_path: Path to ChromaDB persistent storage
             collection_name: ChromaDB collection name
             embedding_model: Sentence-transformers model identifier
+            embedder: Optional pre-built EmbeddingsGenerator to reuse so the
+                SentenceTransformer model is not reloaded
         """
         self.raw_data_dir = raw_data_dir or str(RAW_DATA_DIR)
         self.vectorstore_path = vectorstore_path or str(VECTORSTORE_DIR)
@@ -68,7 +71,7 @@ class IndexBuilder:
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
         )
-        self._embedder: EmbeddingsGenerator | None = None
+        self._embedder: EmbeddingsGenerator | None = embedder
         self._vector_store: VectorStore | None = None
 
     @property

@@ -4,10 +4,14 @@ Retriever Module
 Retrieves relevant document chunks for a given query using semantic search.
 """
 
+import logging
+import time
 from typing import Dict, List, Optional
 
 from src.config import SIMILARITY_THRESHOLD, TOP_K, SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES
 from src.metadata import metadata_match_score
+
+logger = logging.getLogger(__name__)
 
 
 class Retriever:
@@ -35,16 +39,24 @@ class Retriever:
         Returns:
             List of relevant chunks with metadata and similarity scores
         """
+        embedding_start = time.perf_counter()
         query_embedding = self.embedder.embed_text(query, is_query=True)
+        logger.info(
+            "Embedding generation completed in %.3f seconds",
+            time.perf_counter() - embedding_start,
+        )
         query_embedding_list = query_embedding.tolist()
 
         # Search vector database
-        batch_size = min(
-            self.vector_store.collection.count(),
-            max(top_k * SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES),
-        )
+        retrieval_start = time.perf_counter()
+        batch_size = max(
+            top_k * SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES)
         results = self.vector_store.search(
             query_embedding_list, top_k=batch_size)
+        logger.info(
+            "Vector retrieval completed in %.3f seconds",
+            time.perf_counter() - retrieval_start,
+        )
         filters = filters or {}
         latest_versions = self._latest_versions() if filters.get(
             "version") == "Latest Version" else {}

@@ -1,4 +1,6 @@
-﻿import streamlit as st
+﻿from __future__ import annotations
+
+import streamlit as st
 import html
 import logging
 import os
@@ -13,11 +15,9 @@ os.chdir(PROJECT_ROOT)
 
 try:
     from src.config import DUPLICATE_THRESHOLD, RAW_DATA_DIR, SUPPORTED_EXTENSIONS, TOP_K
-    from src.index_builder import IndexBuilder
 except ModuleNotFoundError:
     sys.path.insert(0, str(PROJECT_ROOT))
     from src.config import DUPLICATE_THRESHOLD, RAW_DATA_DIR, SUPPORTED_EXTENSIONS, TOP_K
-    from src.index_builder import IndexBuilder
 
 
 logging.basicConfig(
@@ -187,9 +187,17 @@ st.markdown(
 )
 
 
-@st.cache_resource
-def get_index_builder() -> IndexBuilder:
-    return IndexBuilder()
+@st.cache_resource(show_spinner=False)
+def get_embedder():
+    from src.config import EMBEDDING_MODEL
+    from src.embedder import EmbeddingsGenerator
+    return EmbeddingsGenerator(model_name=EMBEDDING_MODEL)
+
+
+@st.cache_resource(show_spinner=False)
+def get_builder():
+    from src.index_builder import IndexBuilder
+    return IndexBuilder(embedder=get_embedder())
 
 
 def save_uploaded_files(uploaded_files) -> list[str]:
@@ -268,15 +276,25 @@ def rebuild_index(builder: IndexBuilder, rebuild: bool = False, reindex_files: l
         return False
 
 
+def ensure_index_loaded() -> None:
+    """Lazily load the existing index and stats on first interactive use."""
+    if st.session_state.get('pipeline_loaded'):
+        return
+    with st.spinner('Loading your knowledge assistant…'):
+        load_existing_pipeline(get_builder())
+    st.session_state.pipeline_loaded = True
+
+
 def load_existing_pipeline(builder: IndexBuilder) -> None:
     if 'pipeline_loaded' in st.session_state:
         return
 
-    orphaned = builder.remove_orphaned_documents()
-    if orphaned:
-        logger.info('Removed orphaned documents: %s', ', '.join(orphaned))
+    with st.spinner('Loading knowledge index…'):
+        orphaned = builder.remove_orphaned_documents()
+        if orphaned:
+            logger.info('Removed orphaned documents: %s', ', '.join(orphaned))
 
-    stats = builder.get_stats()
+        stats = builder.get_stats()
     st.session_state.index_stats = stats
     st.session_state.index_ready = bool(stats.get('total_chunks'))
 
@@ -294,7 +312,8 @@ def ensure_rag_pipeline(builder: IndexBuilder) -> None:
         st.session_state.rag_pipeline = None
         return
     try:
-        st.session_state.rag_pipeline = builder.create_rag_pipeline()
+        with st.spinner('Loading AI model...'):
+            st.session_state.rag_pipeline = builder.create_rag_pipeline()
     except Exception as exc:
         logger.warning('Could not initialize RAG pipeline: %s', exc)
         st.session_state.rag_pipeline = None
@@ -419,27 +438,40 @@ def answer_question(query: str, top_k: int, audience: str, filters: dict) -> Non
         st.write(query)
 
     with st.chat_message('assistant', avatar='🤖'):
-        with st.spinner('Navigating your knowledge base…'):
-            try:
-                result = st.session_state.rag_pipeline.answer(
-                    query, top_k=top_k, audience=audience, filters=filters,
-                    conversation_history=st.session_state.messages,
+        status_area = st.empty()
+        status = status_area.status('Searching knowledge base...', expanded=False)
+        try:
+            def update_status(phase: str) -> None:
+                label = {
+                    'searching': 'Searching knowledge base...',
+                    'generating': 'Generating answer...',
+                }.get(phase)
+                if label:
+                    status.update(label=label, state='running')
+
+            result = st.session_state.rag_pipeline.answer(
+                query, top_k=top_k, audience=audience, filters=filters,
+                conversation_history=st.session_state.messages,
+                progress_callback=update_status,
+            )
+            status_area.empty()
+
+            if result.get('low_confidence'):
+                st.warning(
+                    'No strong match was found in your documents. '
+                    'Review the sources carefully before acting on this answer.'
                 )
-                if result.get('low_confidence'):
-                    st.warning(
-                        'No strong match was found in your documents. '
-                        'Review the sources carefully before acting on this answer.'
-                    )
-                assistant_message = build_assistant_message(result)
-                render_knowledge_navigator(
-                    assistant_message,
-                    message_index=len(st.session_state.messages),
-                )
-                st.session_state.messages.append(assistant_message)
-            except Exception as exc:
-                logger.exception('Question answering failed')
-                st.error(f'Unable to answer this question: {exc}')
-                st.session_state.messages.pop()
+            assistant_message = build_assistant_message(result)
+            render_knowledge_navigator(
+                assistant_message,
+                message_index=len(st.session_state.messages),
+            )
+            st.session_state.messages.append(assistant_message)
+        except Exception as exc:
+            status_area.empty()
+            logger.exception('Question answering failed')
+            st.error(f'Unable to answer this question: {exc}')
+            st.session_state.messages.pop()
 
 
 def render_source_snippets(chunks: list[dict]) -> None:
@@ -695,14 +727,8 @@ for key, value in {
     'index_stats': {'document_count': 0, 'total_chunks': 0, 'filenames': []},
     'show_library': False,
     'audience': 'End User',
-    'top_k': TOP_K,
 }.items():
     st.session_state.setdefault(key, value)
-
-builder = get_index_builder()
-if 'pipeline_loaded' not in st.session_state:
-    load_existing_pipeline(builder)
-    st.session_state.pipeline_loaded = True
 
 stats = st.session_state.index_stats
 
@@ -728,7 +754,7 @@ with st.sidebar:
         ], index=['End User', 'Support Engineer', 'Technical Writer', 'Administrator', 'Product Manager'].index(st.session_state.audience), key='audience'
     )
     top_k = st.slider(
-        'Sources per answer', 1, 10, st.session_state.top_k,
+        'Sources per answer', 1, 10, TOP_K,
         key='top_k', help='Controls how many document passages are considered for each answer.'
     )
     filters = {}
@@ -757,22 +783,22 @@ with st.sidebar:
                 st.caption(f'📄 {name}')
     st.divider()
     if st.button('↻ Rebuild knowledge index', use_container_width=True):
-        rebuild_index(builder, rebuild=True)
+        rebuild_index(get_builder(), rebuild=True)
     if indexed_files:
         with st.expander('Repository management'):
             delete_filename = st.selectbox(
                 'Delete indexed document', indexed_files)
             if st.button('Delete document', use_container_width=True):
-                builder.delete_document(delete_filename)
-                st.session_state.index_stats = builder.get_stats()
+                get_builder().delete_document(delete_filename)
+                st.session_state.index_stats = get_builder().get_stats()
                 st.rerun()
             if st.button('Clear index (keep uploads)', use_container_width=True):
-                builder.clear_repository(delete_sources=False)
-                load_existing_pipeline(builder)
+                get_builder().clear_repository(delete_sources=False)
+                load_existing_pipeline(get_builder())
                 st.rerun()
             if st.button('Delete repository and uploads', type='secondary', use_container_width=True):
-                builder.clear_repository(delete_sources=True)
-                load_existing_pipeline(builder)
+                get_builder().clear_repository(delete_sources=True)
+                load_existing_pipeline(get_builder())
                 st.rerun()
     if st.button('Clear session', use_container_width=True, type='secondary'):
         clear_session()
@@ -812,14 +838,14 @@ if uploaded_files and st.button('Index uploaded documents', type='primary'):
         document_collection = load_documents_from_directory(
             RAW_DATA_DIR).documents
         for filename in saved:
-            duplicates.extend(builder.find_duplicates(
+            duplicates.extend(get_builder().find_duplicates(
                 filename, DUPLICATE_THRESHOLD, document_list=document_collection))
     if duplicates:
         best = max(duplicates, key=lambda item: item['similarity'])
         st.warning(
             f"Duplicate Document Detected — {best['similarity']:.0%} similar to {best['metadata']['filename']}. Duplicated section: {snippet(best['text'], 180)}"
         )
-    if saved and rebuild_index(builder, rebuild=False, reindex_files=reindex_files):
+    if saved and rebuild_index(get_builder(), rebuild=False, reindex_files=reindex_files):
         st.success(f"Added {len(saved)} document(s): {', '.join(saved)}")
         st.rerun()
     if not saved:
@@ -842,50 +868,66 @@ if not st.session_state.index_ready:
 
 if st.session_state.show_library:
     st.session_state.show_library = False
-    fresh_stats = builder.get_stats()
-    st.session_state.index_stats = fresh_stats
+    try:
+        with st.spinner('Loading your source library…'):
+            fresh_stats = get_builder().get_stats()
+        st.session_state.index_stats = fresh_stats
+    except Exception as exc:
+        logger.exception('Failed to refresh source library statistics')
+        fresh_stats = st.session_state.get('index_stats', {})
+        st.warning(f'The source library could not be refreshed: {exc}')
     render_source_library_panel(fresh_stats.get('documents', []))
 
-else:
-    st.markdown('### AI Knowledge Navigator')
-    st.caption(
-        'Structured answers with sources, related articles, and suggested next steps.')
-    for message_index, message in enumerate(st.session_state.messages):
-        avatar = '🤖' if message['role'] == 'assistant' else '👤'
-        with st.chat_message(message['role'], avatar=avatar):
-            if message['role'] == 'assistant':
-                if message.get('low_confidence'):
-                    st.warning(
-                        'No strong match was found in your documents. '
-                        'Review the sources carefully before acting on this answer.'
-                    )
-                render_knowledge_navigator(
-                    message, message_index=message_index)
-            else:
-                st.write(message['content'])
-
-    pending_follow_up = st.session_state.pop('pending_follow_up', None)
-    if pending_follow_up and has_api_key():
-        ensure_rag_pipeline(builder)
-        if st.session_state.rag_pipeline:
-            answer_question(
-                pending_follow_up,
-                top_k=st.session_state.top_k,
-                audience=st.session_state.audience,
-                filters=filters,
-            )
-
-    query = st.chat_input('Ask a question about your documentation')
-    if query:
-        if not has_api_key():
-            st.error('Add GROQ_API_KEY to `.env` before asking questions.')
+st.markdown('### AI Knowledge Navigator')
+st.caption(
+    'Structured answers with sources, related articles, and suggested next steps.')
+for message_index, message in enumerate(st.session_state.messages):
+    avatar = '🤖' if message['role'] == 'assistant' else '👤'
+    with st.chat_message(message['role'], avatar=avatar):
+        if message['role'] == 'assistant':
+            if message.get('low_confidence'):
+                st.warning(
+                    'No strong match was found in your documents. '
+                    'Review the sources carefully before acting on this answer.'
+                )
+            render_knowledge_navigator(
+                message, message_index=message_index)
         else:
-            ensure_rag_pipeline(builder)
+            st.write(message['content'])
 
-        if has_api_key() and st.session_state.rag_pipeline:
-            answer_question(
-                query,
-                top_k=st.session_state.top_k,
-                audience=st.session_state.audience,
-                filters=filters,
+pending_follow_up = st.session_state.pop('pending_follow_up', None)
+if pending_follow_up and has_api_key():
+    ensure_rag_pipeline(get_builder())
+    if st.session_state.rag_pipeline:
+        answer_question(
+            pending_follow_up,
+            top_k=st.session_state.top_k,
+            audience=st.session_state.audience,
+            filters=filters,
+        )
+
+query = st.chat_input('Ask a question about your documentation')
+if query:
+    if not has_api_key():
+        st.error('Add GROQ_API_KEY to `.env` before asking questions.')
+    else:
+        ensure_index_loaded()
+        if not st.session_state.index_ready:
+            st.warning(
+                'The knowledge index is not loaded yet. '
+                'Upload documents and rebuild the index to start asking questions.'
             )
+        else:
+            ensure_rag_pipeline(get_builder())
+            if st.session_state.rag_pipeline:
+                answer_question(
+                    query,
+                    top_k=st.session_state.top_k,
+                    audience=st.session_state.audience,
+                    filters=filters,
+                )
+            else:
+                st.error(
+                    'The AI model could not be loaded. '
+                    'Check the configuration and try again.'
+                )

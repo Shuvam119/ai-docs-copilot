@@ -136,17 +136,30 @@ Question:
     def generate_navigation_response(
         self,
         query: str,
-        context: str,
+        user_prompt: str,
         sources: List[str],
         system_prompt: Optional[str] = None,
     ) -> Dict:
         """
         Generate a structured knowledge navigation response.
 
-        Returns answer text plus related articles and suggested next steps.
+        Args:
+            query: User's question
+            user_prompt: Fully assembled user message (audience, conversation
+                history, retrieved evidence, related documents, question)
+                from the ContextBuilder
+            sources: List of source file names
+            system_prompt: Optional custom system prompt
+
+        Returns:
+            Dictionary with answer, sources, and query
+
+        Notes:
+            user_prompt is sent verbatim. The ContextBuilder already includes
+            the question and related documents, so re-wrapping it would send
+            duplicate tokens to the model.
         """
         prompt = system_prompt or NAVIGATOR_PROMPT
-        source_list = ", ".join(sources) if sources else "none"
 
         response = self.client.chat.completions.create(
             model=self.model,
@@ -154,14 +167,7 @@ Question:
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": prompt},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Context:\n{context}\n\n"
-                        f"Question:\n{query}\n\n"
-                        f"Available source documents: {source_list}"
-                    ),
-                },
+                {"role": "user", "content": user_prompt},
             ],
         )
 

@@ -34,7 +34,7 @@ class ContextBuilder:
             "system_prompt": f"{NAVIGATOR_PROMPT}\n\nSelected audience: {audience}. {audience_guidance}",
             "user_prompt": (
                 "ENTERPRISE CONTEXT\n"
-                f"Audience: {audience}\nConversation history:\n{recent_history}\n\n"
+                f"Conversation history:\n{recent_history}\n\n"
                 f"Retrieved evidence:\n{'\n\n---\n\n'.join(evidence)}\n\n"
                 f"Related documents: {', '.join(retrieval.get('related_documents', [])) or 'None'}\n"
                 f"Question: {question}"

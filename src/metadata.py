@@ -70,6 +70,27 @@ def _first_match(pattern: str, text: str, default: str) -> str:
     return match.group(1).strip() if match else default
 
 
+_HEADER_BODY_MARKERS = (
+    r"summary",
+    r"table\s+of\s+contents",
+    r"\d+\.\s+(?:introduction|overview|purpose\s+and\s+scope)",
+)
+
+
+def _header_section(text: str, max_chars: int = 3000) -> str:
+    """Return the header/front-matter region of a document.
+
+    Product identity is only trustworthy in the metadata/header block, so the
+    scan region is truncated at the first body-content marker to avoid
+    misreading product names mentioned in the body prose.
+    """
+    marker = re.search(
+        r"(?im)^\s*(?:%s)\b" % "|".join(_HEADER_BODY_MARKERS), text)
+    if marker:
+        text = text[:marker.start()]
+    return text[:max_chars]
+
+
 def _keywords(text: str, limit: int = 10) -> List[str]:
     """Extract useful non-trivial terms without an additional model dependency."""
     stop_words = {"this", "that", "with", "from", "your", "will", "have", "into", "using",
@@ -237,7 +258,10 @@ def extract_metadata(document: Dict[str, Any]) -> Dict[str, Any]:
     version = _first_match(
         r"\b(?:version|ver|v)\s*(\d+(?:\.\d+)*)\b", haystack, "Unspecified")
     product = _first_match(
-        r"(?:product|application|platform)\s*[:\-]\s*([^\n]{2,60})", text, "General")
+        r"(?:product|application|platform)\s*[:\-]\s*([^\n]{2,60})",
+        _header_section(text),
+        "General",
+    )
     department = _first_match(
         r"(?:department|owner|team)\s*[:\-]\s*([^\n]{2,60})", text, "Documentation")
     author = _first_match(

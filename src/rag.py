@@ -4,10 +4,14 @@ RAG Pipeline
 Orchestrates the complete Retrieval-Augmented Generation pipeline.
 """
 
-from typing import Dict, List, Optional
+import logging
+import time
+from typing import Callable, Dict, List, Optional
 
 from src.config import TOP_K
 from src.context_builder import ContextBuilder
+
+logger = logging.getLogger(__name__)
 
 
 class RAGPipeline:
@@ -35,6 +39,7 @@ class RAGPipeline:
         audience: str = "End User",
         filters: Optional[Dict[str, str]] = None,
         conversation_history: Optional[List[Dict]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict:
         """
         Answer a question using the RAG pipeline.
@@ -43,20 +48,49 @@ class RAGPipeline:
             query: User's question
             top_k: Number of chunks to retrieve
             system_prompt: Optional custom system prompt
+            progress_callback: Optional callback invoked with a phase name
+                ("searching", "generating", "complete") so callers can show
+                progress feedback. Purely informational; retrieval and answer
+                generation are unaffected when it is None.
 
         Returns:
             Dictionary with answer, sources, and retrieved chunks
         """
-        retrieval = self.retriever.retrieve_with_context(query, top_k=top_k, filters=filters)
-        prompt = self.context_builder.build(query, retrieval, audience, conversation_history or [])
+        overall_start = time.perf_counter()
 
+        if progress_callback:
+            progress_callback("searching")
+        retrieval = self.retriever.retrieve_with_context(query, top_k=top_k, filters=filters)
+
+        context_start = time.perf_counter()
+        prompt = self.context_builder.build(query, retrieval, audience, conversation_history or [])
+        logger.info(
+            "Context building completed in %.3f seconds",
+            time.perf_counter() - context_start,
+        )
+
+        llm_start = time.perf_counter()
+        if progress_callback:
+            progress_callback("generating")
         llm_result = self.llm.generate_navigation_response(
             query, prompt["user_prompt"],
             retrieval["sources"],
             system_prompt=system_prompt or prompt["system_prompt"],
         )
+        logger.info(
+            "LLM response completed in %.3f seconds",
+            time.perf_counter() - llm_start,
+        )
 
         confidence = self._confidence(retrieval)
+
+        if progress_callback:
+            progress_callback("complete")
+
+        logger.info(
+            "Total answer generation completed in %.3f seconds",
+            time.perf_counter() - overall_start,
+        )
 
         return {
             "query": query,
