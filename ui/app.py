@@ -610,7 +610,7 @@ def build_library_card(document: dict) -> str:
     )
 
 
-@st.dialog('Source Library', width='large', icon=':material/auto_stories:')
+@st.dialog('Source Library', width='large')
 def render_source_library_panel(documents: list[dict]) -> None:
     documents = sort_documents_by_version(documents)
     total_chunks = sum(int(doc.get('total_chunks', 0) or 0) for doc in documents)
