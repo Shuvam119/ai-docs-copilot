@@ -7,7 +7,7 @@ Routes files to the appropriate loader based on file extension.
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from src.docx_loader import load_docx
 from src.pdf_loader import load_pdf
@@ -20,6 +20,45 @@ LOADER_MAPPING = {
     ".docx": load_docx,
     # future: add ".md": load_markdown
 }
+
+# --- Parsed-text cache ------------------------------------------------------
+# Extracting PDF/DOCX text is the most expensive part of indexing. Documents
+# are cached by (resolved path, size, mtime) so unchanged files are never
+# re-parsed across incremental builds. The cache is keyed on the file's
+# stat signature, so a changed file automatically misses and re-parses.
+_TEXT_CACHE: Dict[tuple, Dict] = {}
+_TEXT_CACHE_MAX = 64
+
+
+def _cache_key(file_path: Path) -> Optional[tuple]:
+    try:
+        stat = file_path.stat()
+    except OSError:
+        return None
+    return (str(file_path.resolve()), stat.st_size, stat.st_mtime_ns)
+
+
+def invalidate_document_cache(filename: Optional[str] = None) -> None:
+    """Drop cached parsed text after upload, delete, or reindex.
+
+    Args:
+        filename: When given, only that document is evicted; otherwise the
+            whole cache is cleared.
+    """
+    if filename is None:
+        _TEXT_CACHE.clear()
+        return
+    for key in [key for key in _TEXT_CACHE
+                if Path(key[0]).name == filename]:
+        _TEXT_CACHE.pop(key, None)
+
+
+def _copy_document(document: Dict) -> Dict:
+    """Return a shallow copy so callers may mutate metadata safely."""
+    return {
+        **document,
+        "metadata": dict(document.get("metadata") or {}),
+    }
 
 
 @dataclass
@@ -56,7 +95,18 @@ def load_document(file_path: str) -> Dict:
 
     loader = LOADER_MAPPING.get(suffix)
     if loader:
-        return loader(str(file_path_obj))
+        key = _cache_key(file_path_obj)
+        if key is not None:
+            cached = _TEXT_CACHE.get(key)
+            if cached is not None:
+                return _copy_document(cached)
+        document = loader(str(file_path_obj))
+        if key is not None:
+            _TEXT_CACHE[key] = document
+            if len(_TEXT_CACHE) > _TEXT_CACHE_MAX:
+                for stale in list(_TEXT_CACHE)[:_TEXT_CACHE_MAX // 2]:
+                    _TEXT_CACHE.pop(stale, None)
+        return _copy_document(document)
 
     supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
     raise ValueError(

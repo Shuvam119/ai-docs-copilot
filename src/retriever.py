@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 from src.config import SIMILARITY_THRESHOLD, TOP_K, SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES
 from src.metadata import metadata_match_score
+from src.perf import log_duration
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,7 @@ class Retriever:
         """
         embedding_start = time.perf_counter()
         query_embedding = self.embedder.embed_text(query, is_query=True)
-        logger.info(
-            "Embedding generation completed in %.3f seconds",
-            time.perf_counter() - embedding_start,
-        )
+        log_duration(logger, "Embedding generation", embedding_start)
         query_embedding_list = query_embedding.tolist()
 
         # Search vector database
@@ -53,22 +51,22 @@ class Retriever:
             top_k * SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES)
         results = self.vector_store.search(
             query_embedding_list, top_k=batch_size)
-        logger.info(
-            "Vector retrieval completed in %.3f seconds",
-            time.perf_counter() - retrieval_start,
-        )
+        log_duration(logger, "Vector retrieval", retrieval_start)
         filters = filters or {}
         latest_versions = self._latest_versions() if filters.get(
             "version") == "Latest Version" else {}
+        scoring_filters = {
+            key: value for key, value in filters.items()
+            if key != "version" or value != "Latest Version"}
+        filter_active = any(
+            value not in ("", "All") for value in filters.values())
         ranked = []
         for result in results:
             metadata = result["metadata"]
             if latest_versions and metadata.get("version") != latest_versions.get(metadata.get("title")):
                 continue
-            scoring_filters = {key: value for key, value in filters.items(
-            ) if key != "version" or value != "Latest Version"}
             agreement = metadata_match_score(metadata, scoring_filters)
-            if any(value not in ("", "All") for value in filters.values()) and not agreement:
+            if filter_active and not agreement:
                 continue
             result["metadata_agreement"] = agreement
             result["ranking_score"] = (

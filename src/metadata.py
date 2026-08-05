@@ -181,10 +181,12 @@ def apply_version_lifecycle(documents: Iterable[Dict[str, Any]]) -> None:
 
     for group in groups.values():
         versioned = [
-            (document, parse_version_tuple(document["metadata"].get("version", "")))
+            (document, parse_version_tuple(
+                document["metadata"].get("version", "")))
             for document in group
         ]
-        available = [version for _, version in versioned if version is not None]
+        available = [version for _,
+                     version in versioned if version is not None]
         if not available:
             continue
 
@@ -281,6 +283,9 @@ def extract_metadata(document: Dict[str, Any]) -> Dict[str, Any]:
         "department": department, "author": author, "last_updated": str(date.today()),
         "publication_date": publication_date or str(date.today()),
         "keywords": _keywords(haystack), "summary": summary or "No extractable summary.",
+        "duplicate": False, "duplicate_of": "", "duplicate_score": 0.0,
+        "related_version": False, "related_version_of": "",
+        "related_version_score": 0.0,
     }
     metadata["lifecycle_status"] = determine_lifecycle_status(metadata)
     return metadata

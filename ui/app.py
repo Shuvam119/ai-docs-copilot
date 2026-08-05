@@ -119,6 +119,13 @@ st.markdown(
         .lifecycle-stale { background: #fee2e2; color: #991b1b; }
         .lifecycle-archived { background: #f8fafc; color: #475569; }
         .lifecycle-needs-review { background: #e0e7ff; color: #3730a3; }
+        .duplicate-badge {
+            display: inline-flex; align-items: center; gap: .35rem;
+            border-radius: 999px; padding: .2rem .65rem; font-size: .78rem;
+            font-weight: 700; margin-left: .4rem;
+            background: #eef6ff; color: #1d4ed8;
+            border: 1px solid #c7d2fe;
+        }
         .source-library-meta { color: #475467; font-size: .92rem; margin-top: .3rem; }
         [data-testid="stDialog"] > div {
             border-radius: 22px;
@@ -439,7 +446,8 @@ def answer_question(query: str, top_k: int, audience: str, filters: dict) -> Non
 
     with st.chat_message('assistant', avatar='🤖'):
         status_area = st.empty()
-        status = status_area.status('Searching knowledge base...', expanded=False)
+        status = status_area.status(
+            'Searching knowledge base...', expanded=False)
         try:
             def update_status(phase: str) -> None:
                 label = {
@@ -520,7 +528,8 @@ def version_key(item: dict) -> tuple[int, ...]:
 def sort_documents_by_version(documents: list[dict]) -> list[dict]:
     return sorted(
         documents,
-        key=lambda item: (version_key(item), str(item.get('title', '')).lower()),
+        key=lambda item: (version_key(item), str(
+            item.get('title', '')).lower()),
         reverse=True,
     )
 
@@ -538,7 +547,8 @@ def sort_documents(documents: list[dict], sort_by: str) -> list[dict]:
     if sort_by == 'Version: oldest first':
         return sorted(
             documents,
-            key=lambda item: (version_key(item), str(item.get('title', '')).lower()),
+            key=lambda item: (version_key(item), str(
+                item.get('title', '')).lower()),
         )
     return sort_documents_by_version(documents)
 
@@ -582,6 +592,18 @@ def build_library_card(document: dict) -> str:
     document_type = html.escape(str(document.get('document_type', '')))
     chunks = document.get('total_chunks', 0)
     badge_html = lifecycle_badge(document)
+    duplicate_html = ''
+    if document.get('duplicate'):
+        duplicate_score = document.get('duplicate_score', 0.0)
+        try:
+            percentage = max(0.0, min(100.0, float(duplicate_score) * 100.0))
+        except (TypeError, ValueError):
+            percentage = 0.0
+        duplicate_html = (
+            '<span class="duplicate-badge" '
+            f'title="Duplicate document detected">Duplicate ({percentage:.0f}%)'
+            '</span>'
+        )
 
     meta_rows = [('Version', version), ('Chunks', str(chunks))]
     if last_updated:
@@ -603,17 +625,54 @@ def build_library_card(document: dict) -> str:
 
     return (
         '<div class="library-card">'
-        f'<div class="library-card-top"><div class="library-card-title" title="{filename}">{title}</div>{badge_html}</div>'
+        f'<div class="library-card-top"><div class="library-card-title" title="{filename}">{title}</div>{badge_html}{duplicate_html}</div>'
         f'<div class="library-tags">{"".join(tags)}</div>'
         f'<div class="library-meta">{meta_html}</div>'
         '</div>'
     )
 
 
+def render_duplicate_panel(warnings: list[dict]) -> None:
+    """Render the persistent duplicate-detection warning panel.
+
+    The panel is driven by session state so it stays visible until the user
+    dismisses it, uploads a different batch (which replaces the warnings), or
+    refreshes the page. It never auto-hides after indexing.
+    """
+    if not warnings:
+        return
+    with st.container(border=True):
+        st.markdown('### ⚠️ Duplicate Documents Found')
+        for warning in warnings:
+            similarity = warning.get('similarity', 0.0)
+            try:
+                percentage = max(0.0, min(100.0, float(similarity) * 100.0))
+            except (TypeError, ValueError):
+                percentage = 0.0
+            source = html.escape(str(warning.get('source', 'Unknown')))
+            match = html.escape(str(warning.get('match', 'Unknown')))
+            line = (
+                f"- **{source}** is **{percentage:.0f}%** similar to "
+                f"**{match}**"
+            )
+            if warning.get('same_upload'):
+                line += ' **(same upload)**'
+            st.markdown(line)
+        st.caption(
+            'Duplicate checks run before indexing. Dismiss this panel or upload '
+            'a different batch to replace it; refreshing the page clears it.'
+        )
+        if st.button('Dismiss duplicate warnings', type='secondary',
+                     key='dismiss_duplicate_warnings'):
+            st.session_state.duplicate_warnings = []
+            st.rerun()
+
+
 @st.dialog('Source Library', width='large')
 def render_source_library_panel(documents: list[dict]) -> None:
     documents = sort_documents_by_version(documents)
-    total_chunks = sum(int(doc.get('total_chunks', 0) or 0) for doc in documents)
+    total_chunks = sum(int(doc.get('total_chunks', 0) or 0)
+                       for doc in documents)
     document_types = sorted(
         {doc.get('document_type', 'Unknown') for doc in documents})
     lifecycle_statuses = sorted(
@@ -700,7 +759,8 @@ def render_source_library_panel(documents: list[dict]) -> None:
             columns = st.columns(2)
             for index, document in enumerate(filtered):
                 with columns[index % 2]:
-                    st.markdown(build_library_card(document), unsafe_allow_html=True)
+                    st.markdown(build_library_card(document),
+                                unsafe_allow_html=True)
         st.markdown(
             '<div class="library-tag-legend">Blue tags: document type · '
             'grey tags: keywords · badges: lifecycle status</div>',
@@ -727,6 +787,7 @@ for key, value in {
     'index_stats': {'document_count': 0, 'total_chunks': 0, 'filenames': []},
     'show_library': False,
     'audience': 'End User',
+    'duplicate_warnings': [],
 }.items():
     st.session_state.setdefault(key, value)
 
@@ -829,29 +890,71 @@ with summary_col:
 
 if uploaded_files and st.button('Index uploaded documents', type='primary'):
     saved = save_uploaded_files(uploaded_files)
-    duplicates = []
+    st.session_state.duplicate_warnings = []
     reindex_files = []
-    if saved:
-        existing = set(st.session_state.index_stats.get('filenames', []))
-        reindex_files = [name for name in saved if name in existing]
-        from src.load_document import load_documents_from_directory
-        document_collection = load_documents_from_directory(
-            RAW_DATA_DIR).documents
-        for filename in saved:
-            duplicates.extend(get_builder().find_duplicates(
-                filename, DUPLICATE_THRESHOLD, document_list=document_collection))
-    if duplicates:
-        best = max(duplicates, key=lambda item: item['similarity'])
-        st.warning(
-            f"Duplicate Document Detected — {best['similarity']:.0%} similar to {best['metadata']['filename']}. Duplicated section: {snippet(best['text'], 180)}"
-        )
-    if saved and rebuild_index(get_builder(), rebuild=False, reindex_files=reindex_files):
-        st.success(f"Added {len(saved)} document(s): {', '.join(saved)}")
-        st.rerun()
     if not saved:
         st.warning('No supported files were selected.')
+    else:
+        existing = set(st.session_state.index_stats.get('filenames', []))
+        reindex_files = [name for name in saved if name in existing]
+        # Detect duplicates for this upload batch BEFORE indexing: each
+        # uploaded file is compared against the repository and against the
+        # other files in the same batch. Failures are logged and skipped so a
+        # single problem file never suppresses the whole detection pass.
+        warning_entries = []
+        try:
+            import time
+            from src.load_document import load_documents_from_directory
+            from src.index_builder import _DetectionContext
+            from src.perf import log_duration
+            document_collection = load_documents_from_directory(
+                RAW_DATA_DIR).documents
+            detection_context = _DetectionContext()
+            detection_start = time.perf_counter()
+            for filename in saved:
+                try:
+                    matches = get_builder().find_duplicates(
+                        filename, DUPLICATE_THRESHOLD,
+                        document_list=document_collection,
+                        detection_context=detection_context)
+                except Exception:
+                    logger.exception(
+                        'Duplicate detection failed for %s', filename)
+                    continue
+                for match in matches:
+                    if match.get('match_type', 'duplicate') != 'duplicate':
+                        continue
+                    source = match.get('source_filename') or match[
+                        'metadata'].get('filename', 'Unknown')
+                    match_name = match.get('match_filename') or match[
+                        'metadata'].get('filename', 'Unknown')
+                    warning_entries.append({
+                        'source': source,
+                        'match': match_name,
+                        'similarity': match.get('similarity', 0.0),
+                        'same_upload': match_name in saved,
+                    })
+            log_duration(logger, 'Duplicate detection (upload batch)', detection_start)
+        except Exception:
+            logger.exception('Duplicate detection failed for upload batch')
+
+        best_per_source: dict = {}
+        for entry in warning_entries:
+            previous = best_per_source.get(entry['source'])
+            if previous is None or entry['similarity'] > previous['similarity']:
+                best_per_source[entry['source']] = entry
+        st.session_state.duplicate_warnings = sorted(
+            best_per_source.values(),
+            key=lambda entry: -entry['similarity'],
+        )
+
+        if saved and rebuild_index(get_builder(), rebuild=False, reindex_files=reindex_files):
+            st.success(f"Added {len(saved)} document(s): {', '.join(saved)}")
+            st.rerun()
 
 st.divider()
+
+render_duplicate_panel(st.session_state.duplicate_warnings)
 
 # The source library opens as a floating modal window from the sidebar.
 

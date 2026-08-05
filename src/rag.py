@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional
 
 from src.config import TOP_K
 from src.context_builder import ContextBuilder
+from src.perf import log_duration
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +65,7 @@ class RAGPipeline:
 
         context_start = time.perf_counter()
         prompt = self.context_builder.build(query, retrieval, audience, conversation_history or [])
-        logger.info(
-            "Context building completed in %.3f seconds",
-            time.perf_counter() - context_start,
-        )
+        log_duration(logger, "Context building", context_start)
 
         llm_start = time.perf_counter()
         if progress_callback:
@@ -77,20 +75,14 @@ class RAGPipeline:
             retrieval["sources"],
             system_prompt=system_prompt or prompt["system_prompt"],
         )
-        logger.info(
-            "LLM response completed in %.3f seconds",
-            time.perf_counter() - llm_start,
-        )
+        log_duration(logger, "LLM response", llm_start)
 
         confidence = self._confidence(retrieval)
 
         if progress_callback:
             progress_callback("complete")
 
-        logger.info(
-            "Total answer generation completed in %.3f seconds",
-            time.perf_counter() - overall_start,
-        )
+        log_duration(logger, "Total answer generation", overall_start)
 
         return {
             "query": query,

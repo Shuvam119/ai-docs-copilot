@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _client_registry: Dict[str, chromadb.ClientAPI] = {}
 _collection_registry: Dict[str, chromadb.Collection] = {}
 _stats_registry: Dict[str, Dict] = {}
+_text_map_registry: Dict[str, Dict[str, str]] = {}
 _registry_lock = threading.Lock()
 
 
@@ -61,7 +62,8 @@ def _get_collection(vectorstore_path: str, collection_name: str) -> chromadb.Col
                 metadata={"hnsw:space": "cosine"},
             )
             _collection_registry[key] = collection
-            logger.info("Created ChromaDB collection %r at %s", collection_name, key)
+            logger.info("Created ChromaDB collection %r at %s",
+                        collection_name, key)
     return collection
 
 
@@ -71,6 +73,7 @@ def _drop_cached_collection(vectorstore_path: str, collection_name: str) -> None
     with _registry_lock:
         _collection_registry.pop(key, None)
         _stats_registry.pop(key, None)
+        _text_map_registry.pop(key, None)
 
 
 class VectorStore:
@@ -119,6 +122,7 @@ class VectorStore:
     def _invalidate_stats(self) -> None:
         with _registry_lock:
             _stats_registry.pop(self._stats_key(), None)
+            _text_map_registry.pop(self._stats_key(), None)
 
     def add_chunks(self, chunks: List[Dict]) -> int:
         """
@@ -156,6 +160,12 @@ class VectorStore:
                 "last_updated": metadata.get("last_updated", ""),
                 "publication_date": metadata.get("publication_date", ""),
                 "lifecycle_status": metadata.get("lifecycle_status", "Fresh"),
+                "duplicate": metadata.get("duplicate", False),
+                "duplicate_of": metadata.get("duplicate_of", ""),
+                "duplicate_score": metadata.get("duplicate_score", 0.0),
+                "related_version": metadata.get("related_version", False),
+                "related_version_of": metadata.get("related_version_of", ""),
+                "related_version_score": metadata.get("related_version_score", 0.0),
                 "keywords": ", ".join(metadata.get("keywords", [])),
                 "summary": metadata.get("summary", ""),
             })
@@ -262,6 +272,33 @@ class VectorStore:
                   text, meta in zip(data["ids"], data["documents"], data["metadatas"])]
         return sorted(chunks, key=lambda item: item["metadata"].get("chunk_index", 0))
 
+    def document_text_map(self) -> Dict[str, str]:
+        """Map every indexed filename to its chunk text in document order.
+
+        One batched Chroma read replaces per-document queries, which duplicate
+        detection previously issued for each indexed file. The result is cached
+        process-wide and invalidated whenever chunks are added or deleted.
+        """
+        key = self._stats_key()
+        cached = _text_map_registry.get(key)
+        if cached is not None:
+            return cached
+
+        data = self.collection.get(include=["documents", "metadatas"])
+        by_filename: Dict[str, list] = {}
+        for text, metadata in zip(data["documents"], data["metadatas"]):
+            if not metadata or "filename" not in metadata:
+                continue
+            filename = metadata["filename"]
+            by_filename.setdefault(filename, []).append(
+                (int(metadata.get("chunk_index", 0)), text))
+        text_map = {
+            filename: "\n".join(text for _, text in sorted(entries))
+            for filename, entries in by_filename.items()
+        }
+        _text_map_registry[key] = text_map
+        return text_map
+
     def delete_document(self, filename: str) -> int:
         """Delete indexed chunks for a document and return the number removed."""
         existing = self.collection.get(where={"filename": filename})
@@ -281,6 +318,7 @@ class VectorStore:
                 self.collection_name,
             )
 
-        _drop_cached_collection(str(self.vectorstore_path), self.collection_name)
+        _drop_cached_collection(
+            str(self.vectorstore_path), self.collection_name)
         _get_collection(str(self.vectorstore_path), self.collection_name)
         logger.info("Cleared collection: %s", self.collection_name)

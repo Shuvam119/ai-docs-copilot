@@ -24,6 +24,13 @@ COLLECTION_NAME = "documents"
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.5"))
 DUPLICATE_THRESHOLD = float(os.getenv("DUPLICATE_THRESHOLD", "0.88"))
+# Normalized-text similarity at or above this value makes a document pair a
+# "likely match" that is worth confirming with a semantic embedding comparison.
+# Pairs below it clearly differ in content and are never duplicates, so no
+# embedding is ever computed for them. This keeps cross-format (PDF/DOCX)
+# copies detectable without embedding every pair.
+DUPLICATE_SEMANTIC_FLOOR = float(
+    os.getenv("DUPLICATE_SEMANTIC_FLOOR", "0.6"))
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 
